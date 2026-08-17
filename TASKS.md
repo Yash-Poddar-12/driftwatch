@@ -9,8 +9,8 @@
 ## Phase 1 — Producers + Kafka (local, Docker Compose)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Scaffold `services/log-producer/` (Dockerfile, producer.py, requirements.txt) | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/log-producer-service` |
-| Add Kafka + producers to `docker-compose.yml` | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/log-producer-service` |
+| Scaffold `services/log-producer/` (Dockerfile, producer.py, requirements.txt) | ✅ | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/log-producer-service`. Built producer.py (rate control, 3-mode ANOMALY_MODE, /healthz daemon thread, Kafka retry loop). Multi-stage Dockerfile, non-root user, python:3.11-slim, kafka-python-ng==2.2.3 pinned. |
+| Add Kafka + producers to `docker-compose.yml` | ✅ | Antigravity / Claude Sonnet 4.6 | apache/kafka:4.3.1 KRaft mode (no ZooKeeper), named volume, 3-partition topic. Three producer replicas: auth-service/us-east-1, payments-service/eu-west-1, inventory-service/ap-southeast-1. `/healthz` exposed on host ports 8081-8083. Follow-up: Phase 1 verification (console consumer) is still ⬜. |
 | Verify events visible via console consumer | ⬜ | — | |
 
 ## Phase 2 — Anomaly Detector (local)
