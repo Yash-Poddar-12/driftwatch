@@ -126,20 +126,24 @@ log-anomaly-pipeline/
 
 ### 4.1 Log Producers
 Small, independently containerized Python services that simulate real microservices emitting logs. Each producer:
-- Publishes structured JSON events to a Kafka topic (`logs.raw` or per-service topics) at a configurable events/second rate
+- Publishes structured JSON events to a Kafka topic (`logs.raw`) at a configurable events/second rate
 - Emits realistic fields: `timestamp`, `service_name`, `status_code`, `latency_ms`, `message`, `region`
 - Supports an `ANOMALY_MODE` environment variable to deliberately inject latency spikes, error bursts, or unusual status code distributions — this gives you labeled ground truth to validate the detector against
-- Run 3-4 instances representing different services (e.g. `auth-service`, `payments-service`, `inventory-service`) and optionally different simulated regions
+- Run 3 instances representing different services (`auth-service` in `us-east-1`, `payments-service` in `eu-west-1`, `inventory-service` in `ap-southeast-1`)
+- Exposes a `/healthz` HTTP endpoint on port 8080 (AGENTS.md rule 6); host ports 8081–8083 are mapped for easy `curl` debugging
 
-**What you'll learn:** structuring realistic synthetic data generators, Kafka producer clients, basic service simulation patterns used in chaos/load testing.
+**Implementation:** `services/log-producer/producer.py` — single-file Python service with a daemon-thread HTTP health server, Kafka connection-retry loop (10 attempts × 5 s), and `build_event()` that switches behaviour based on `ANOMALY_MODE`. Multi-stage `Dockerfile` (python:3.11-slim, non-root `appuser`).
+
+**What you'll learn:** structuring realistic synthetic data generators, Kafka producer clients (`kafka-python-ng`), daemon threads in Python, multi-stage Docker builds, environment-driven configuration.
 
 ### 4.2 Kafka
 The streaming backbone. Producers publish, the anomaly detector (and potentially other consumers) subscribe.
-- Single topic with multiple partitions (partition by `service_name` or `region` for parallelism)
-- Consumer group semantics so you could run multiple detector replicas that split the partition load
-- Runs via the `bitnami/kafka` or `confluentinc/cp-kafka` Docker image locally; as a `StatefulSet` in Kubernetes (needs stable network identity + persistent storage per broker)
+- Single topic (`logs.raw`) with 3 partitions — partition count matches the number of producer services so the future detector can run one consumer thread per partition
+- Consumer group semantics so multiple detector replicas split the partition load
+- Runs via `apache/kafka:4.3.1` in **KRaft mode** (no ZooKeeper — Kafka 4.x removed it entirely). `KAFKA_PROCESS_ROLES=broker,controller` lets a single container fill both roles locally
+- `PLAINTEXT_HOST://localhost:29092` listener exposed so you can run `kafka-console-consumer.sh` from your laptop to verify events are flowing
 
-**What you'll learn:** topics, partitions, consumer groups, offset commits, at-least-once vs. exactly-once delivery tradeoffs, why stateful workloads need `StatefulSet` rather than `Deployment` in Kubernetes.
+**What you'll learn:** topics, partitions, consumer groups, offset commits, at-least-once vs. exactly-once delivery tradeoffs, why stateful workloads need `StatefulSet` rather than `Deployment` in Kubernetes, KRaft vs ZooKeeper architecture.
 
 ### 4.3 Anomaly Detector
 The ML core of the system. A Kafka consumer service that:

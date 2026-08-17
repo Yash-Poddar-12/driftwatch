@@ -1,0 +1,205 @@
+# docker-compose.yml — local development orchestration for DriftWatch.
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+#  Kafka image: apache/kafka:4.3.1 (official Apache image, KRaft mode).
+#    Kafka 4.x removed ZooKeeper completely; KRaft is the only mode.
+#    We do NOT use bitnami/kafka — Bitnami moved free images to a legacy,
+#    unmaintained repository.
+#
+#  KRaft single-node: KAFKA_PROCESS_ROLES=broker,controller means this one
+#    container handles both client connections (broker) AND cluster metadata
+#    (controller — the role ZooKeeper used to fill).  Fine for local dev;
+#    in production these roles run on separate nodes.
+#
+#  ADVERTISED_LISTENERS vs LISTENERS: Kafka binds on the LISTENERS addresses
+#    internally, but tells clients to reconnect to ADVERTISED_LISTENERS.
+#    PLAINTEXT://kafka:9092  — used by other Docker containers (producers).
+#    PLAINTEXT_HOST://localhost:29092 — lets you run a console consumer on
+#    your laptop with: kafka-console-consumer.sh --bootstrap-server localhost:29092
+#
+#  depends_on condition:service_healthy: producers wait for Kafka's HEALTHCHECK
+#    to report healthy before starting, avoiding startup-race "Connection refused".
+#
+#  Three producer replicas, same image, different SERVICE_NAME/REGION env vars.
+#    Demonstrates README §2.3 "config via environment, not code" and gives the
+#    detector realistic multi-service data from the very first run.
+
+version: "3.9"
+
+# --------------------------------------------------------------------------- #
+# Networks                                                                      #
+# --------------------------------------------------------------------------- #
+networks:
+  driftwatch:
+    driver: bridge
+
+# --------------------------------------------------------------------------- #
+# Services                                                                      #
+# --------------------------------------------------------------------------- #
+services:
+
+  # ── Kafka (KRaft mode, single-node) ─────────────────────────────────────── #
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: kafka
+    networks:
+      - driftwatch
+    ports:
+      # 29092 → exposed to the host so you can use kafka-console-consumer.sh
+      # from your laptop to verify events are flowing (Phase 1 verification).
+      - "29092:29092"
+    environment:
+      # ── KRaft cluster identity ──────────────────────────────────────────── #
+      # CLUSTER_ID: a stable UUID shared by all brokers in the cluster.
+      # In a single-node setup it's arbitrary but must stay consistent across
+      # restarts (stored in the data volume below).
+      KAFKA_KRAFT_CLUSTER_ID: "driftwatch-local-dev-cluster-01"
+
+      # KAFKA_NODE_ID: the numeric broker ID for this node.
+      KAFKA_NODE_ID: "1"
+
+      # PROCESS_ROLES: broker = handles producers/consumers; controller =
+      # manages cluster metadata (replaces ZooKeeper in KRaft).
+      # Single-node runs both roles in one container.
+      KAFKA_PROCESS_ROLES: "broker,controller"
+
+      # CONTROLLER_QUORUM_VOTERS: <node_id>@<host>:<controller_port>
+      # With one node, the quorum is just itself.
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+
+      # ── Listeners ──────────────────────────────────────────────────────── #
+      # LISTENERS — what Kafka binds on inside the container.
+      #   CONTROLLER://  is the internal Raft/metadata channel.
+      #   PLAINTEXT://   is the broker channel for Docker-networked clients.
+      #   PLAINTEXT_HOST:// is a second broker channel bound to all interfaces
+      #                   so the host machine can reach port 29092.
+      KAFKA_LISTENERS: "CONTROLLER://kafka:9093,PLAINTEXT://kafka:9092,PLAINTEXT_HOST://0.0.0.0:29092"
+
+      # ADVERTISED_LISTENERS — what clients are told to reconnect to.
+      # Producers inside Docker use kafka:9092.
+      # Host-side tools use localhost:29092.
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092"
+
+      # Map the listener names to their security protocols.
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+
+      # Which listener the controller uses for inter-broker Raft traffic.
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+
+      # ── Topic / retention defaults ──────────────────────────────────────── #
+      # Auto-create the logs.raw topic on first publish.  Disabling
+      # auto-create later (in prod) is a best practice, but for local
+      # iteration this is convenient.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      # 3 partitions for logs.raw lets the future detector run 3 parallel
+      # consumer threads, one per partition (consumer group parallelism).
+      KAFKA_NUM_PARTITIONS: "3"
+
+      # Replication factor 1 is correct for a single-node cluster.
+      # (You cannot replicate to more brokers than exist.)
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+
+      # Retain logs for 24 hours locally (adjust for longer-running tests).
+      KAFKA_LOG_RETENTION_HOURS: "24"
+    healthcheck:
+      # Use Kafka's own kafka-topics.sh as a health probe — if it can list
+      # topics, the broker is fully ready for connections.
+      test:
+        - "CMD-SHELL"
+        - "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list > /dev/null 2>&1"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    volumes:
+      # Persist Kafka data across docker compose down/up cycles.
+      # Without this, every restart clears all topics and offsets.
+      - kafka-data:/tmp/kraft-combined-logs
+
+  # ── Log Producers ──────────────────────────────────────────────────────── #
+  # Three replicas of the same image, each representing a different simulated
+  # microservice in a different AWS region.  SERVICE_NAME and REGION are the
+  # only differences — this is the "config via environment" principle from
+  # README §2.3 in action.
+
+  log-producer-auth:
+    build:
+      context: ./services/log-producer
+      dockerfile: Dockerfile
+    image: driftwatch/log-producer:latest
+    container_name: log-producer-auth
+    networks:
+      - driftwatch
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_TOPIC: "logs.raw"
+      SERVICE_NAME: "auth-service"
+      REGION: "us-east-1"
+      EVENTS_PER_SECOND: "5"
+      # Set ANOMALY_MODE to "latency_spike", "error_burst", or "unusual_status"
+      # on the relevant container to inject labeled test anomalies.
+      ANOMALY_MODE: ""
+    ports:
+      - "8081:8080"   # /healthz reachable at localhost:8081/healthz
+    restart: unless-stopped
+
+  log-producer-payments:
+    build:
+      context: ./services/log-producer
+      dockerfile: Dockerfile
+    image: driftwatch/log-producer:latest
+    container_name: log-producer-payments
+    networks:
+      - driftwatch
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_TOPIC: "logs.raw"
+      SERVICE_NAME: "payments-service"
+      REGION: "eu-west-1"
+      EVENTS_PER_SECOND: "3"
+      ANOMALY_MODE: ""
+    ports:
+      - "8082:8080"
+    restart: unless-stopped
+
+  log-producer-inventory:
+    build:
+      context: ./services/log-producer
+      dockerfile: Dockerfile
+    image: driftwatch/log-producer:latest
+    container_name: log-producer-inventory
+    networks:
+      - driftwatch
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_TOPIC: "logs.raw"
+      SERVICE_NAME: "inventory-service"
+      REGION: "ap-southeast-1"
+      EVENTS_PER_SECOND: "4"
+      ANOMALY_MODE: ""
+    ports:
+      - "8083:8080"
+    restart: unless-stopped
+
+# --------------------------------------------------------------------------- #
+# Volumes                                                                       #
+# --------------------------------------------------------------------------- #
+volumes:
+  # Named volume for Kafka's KRaft log directory.
+  # Named volumes persist across container recreates; anonymous volumes do not.
+  kafka-data:

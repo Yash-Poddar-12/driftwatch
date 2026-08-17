@@ -9,8 +9,8 @@
 ## Phase 1 — Producers + Kafka (local, Docker Compose)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Scaffold `services/log-producer/` (Dockerfile, producer.py, requirements.txt) | ⬜ | — | |
-| Add Kafka + producers to `docker-compose.yml` | ⬜ | — | |
+| Scaffold `services/log-producer/` (Dockerfile, producer.py, requirements.txt) | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/log-producer-service` |
+| Add Kafka + producers to `docker-compose.yml` | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/log-producer-service` |
 | Verify events visible via console consumer | ⬜ | — | |
 
 ## Phase 2 — Anomaly Detector (local)
