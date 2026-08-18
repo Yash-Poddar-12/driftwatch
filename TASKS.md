@@ -16,10 +16,10 @@
 ## Phase 2 — Anomaly Detector (local)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Scaffold `services/anomaly-detector/` | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/anomaly-detector-service` |
-| Sliding-window feature extraction (`features.py`) | 🟨 | Antigravity / Claude Sonnet 4.6 | 30s window / 10s slide, per-service, extracts request count, error rate, p50/p95/p99 latency, entropy |
-| Train + integrate Isolation Forest v1 model | 🟨 | Antigravity / Claude Sonnet 4.6 | offline synthetic training, model saved to models/, ADR in docs/decisions/ |
-| Unit tests for detector scoring | 🟨 | Antigravity / Claude Sonnet 4.6 | pytest, synthetic normal vs. anomalous windows |
+| Scaffold `services/anomaly-detector/` | ✅ | Antigravity / Claude Sonnet 4.6 | `features.py`, `train.py`, `detector.py`, `Dockerfile`, `requirements.txt`, `.gitignore`. Dockerfile bakes the trained model in at build time. /healthz on port 8084. |
+| Sliding-window feature extraction (`features.py`) | ✅ | Antigravity / Claude Sonnet 4.6 | `SlidingWindowAccumulator` with per-service deque (O(1) prune). 6-vector: request_count, error_rate, p50/p95/p99_ms, status_entropy. Shannon entropy hand-rolled. |
+| Train + integrate Isolation Forest v1 model | ✅ | Antigravity / Claude Sonnet 4.6 | Offline synthetic training (5000 windows, seed=42). Model at `services/anomaly-detector/models/isolation_forest_v1.joblib`. ADRs: 0001-isolation-forest-v1.md, 0002-synthetic-training-data.md. |
+| Unit tests for detector scoring | ✅ | Antigravity / Claude Sonnet 4.6 | 20/20 passing. Tests: percentile math, entropy, extract_features, sliding-window pruning/timing, model correctly flags latency-spike and error-burst windows as anomalous; normal window not flagged. |
 
 ## Phase 3 — Storage + Dashboard (local)
 | Task | Status | Assigned Tool | Notes |
