@@ -146,6 +146,25 @@ def _build_consumer() -> KafkaConsumer:
     value_deserializer: decode UTF-8 JSON bytes back to a Python dict.
     enable_auto_commit=False: we commit manually after processing.
     auto_offset_reset="latest": skip stale backlog on cold start.
+
+    Timeout relationship (AGENTS.md §1 — explain every choice):
+      session_timeout_ms  — how long the *broker* waits for a heartbeat
+                            before declaring this consumer dead and triggering
+                            a rebalance.  30 s is the Kafka default.
+      heartbeat_interval_ms — how often the client sends heartbeats.
+                            Must be < session_timeout_ms / 3 so at least
+                            3 heartbeats can be missed before the broker
+                            gives up.  10 s satisfies that (30 / 3 = 10).
+      request_timeout_ms  — how long the *client* waits for any broker
+                            response (including the heartbeat ACK).
+                            kafka-python-ng requires this to be STRICTLY
+                            GREATER than session_timeout_ms.  The rationale:
+                            if both were equal, a valid-but-slow response
+                            could arrive after the broker has already expired
+                            the session, ejecting the consumer mid-flight.
+                            45 000 ms gives 50 % headroom above the 30 s
+                            session timeout — enough margin without making
+                            the client hang indefinitely on a truly dead broker.
     """
     return KafkaConsumer(
         KAFKA_TOPIC,
@@ -154,9 +173,9 @@ def _build_consumer() -> KafkaConsumer:
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         enable_auto_commit=False,
         auto_offset_reset="latest",
-        request_timeout_ms=30_000,
+        request_timeout_ms=45_000,   # must be > session_timeout_ms (30 000)
         session_timeout_ms=30_000,
-        heartbeat_interval_ms=10_000,
+        heartbeat_interval_ms=10_000,  # < session_timeout_ms / 3
     )
 
 
