@@ -196,6 +196,47 @@ services:
       - "8083:8080"
     restart: unless-stopped
 
+  # ── Anomaly Detector ─────────────────────────────────────────────────────── #
+  # Kafka consumer that scores each sliding window with a pre-trained Isolation
+  # Forest.  Phase 2 scope: prints (timestamp, service_name, anomaly_score,
+  # is_anomalous) to stdout.  TimescaleDB write is Phase 3.
+  #
+  # Why depends_on kafka only (not the producers)?
+  #   The detector reads whatever is already in the topic — it doesn't need
+  #   producers to be running.  This means you can start the detector alone for
+  #   testing without spinning up the full producer fleet.
+  #
+  # Why auto_offset_reset=latest?
+  #   On first start there may be many minutes of backlog.  Replaying it would
+  #   produce a flood of stale windows before the sliding window stabilises,
+  #   causing false anomaly alerts.  "latest" gives a clean start; you can
+  #   change it to "earliest" to replay history intentionally.
+  anomaly-detector:
+    build:
+      context: ./services/anomaly-detector
+      dockerfile: Dockerfile
+    image: driftwatch/anomaly-detector:latest
+    container_name: anomaly-detector
+    networks:
+      - driftwatch
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_TOPIC: "logs.raw"
+      KAFKA_GROUP_ID: "driftwatch-anomaly-detector"
+      # Model path inside the container (baked in during docker build).
+      # To hot-swap the model without a rebuild: mount a volume over /app/models/
+      # and point ANOMALY_MODEL_PATH at the mounted file.
+      ANOMALY_MODEL_PATH: "/app/models/isolation_forest_v1.joblib"
+      WINDOW_SECONDS: "30"
+      WINDOW_SLIDE_SECONDS: "10"
+      HEALTHZ_PORT: "8084"
+    ports:
+      - "8084:8084"   # /healthz reachable at localhost:8084/healthz
+    restart: unless-stopped
+
 # --------------------------------------------------------------------------- #
 # Volumes                                                                       #
 # --------------------------------------------------------------------------- #
@@ -203,3 +244,4 @@ volumes:
   # Named volume for Kafka's KRaft log directory.
   # Named volumes persist across container recreates; anonymous volumes do not.
   kafka-data:
+

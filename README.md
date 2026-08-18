@@ -157,7 +157,13 @@ The ML core of the system. A Kafka consumer service that:
 - **v1 — Isolation Forest** (scikit-learn): fast to train, interpretable, good baseline. Train on a period of "normal" traffic, then score live windows.
 - **v2 — Autoencoder** (PyTorch or TensorFlow): trained to reconstruct normal feature vectors; high reconstruction error = anomaly. More expressive, gives you a deep learning story alongside the classical baseline, and a natural "v1 vs v2" comparison section for your writeup.
 
+**Implementation:** three files in `services/anomaly-detector/`:
+- `features.py` — `SlidingWindowAccumulator` holds a per-service `deque` (O(1) prune via `popleft()`). On each slide tick, `extract_features()` computes the 6-vector: `[request_count, error_rate, p50_ms, p95_ms, p99_ms, status_entropy]`. Shannon entropy of the status-code distribution is hand-rolled (no external dep) and catches unusual-status anomalies that raw error rate misses.
+- `train.py` — offline training; replicates `producer.py`'s exact statistical distributions (log-normal latency μ=4.4 σ=0.5, weighted status codes) to generate 5 000 synthetic normal windows. No live Kafka connection required. Model is baked into the Docker image at build time. See ADR `docs/decisions/0001-isolation-forest-v1.md` and `docs/decisions/0002-synthetic-training-data.md`.
+- `detector.py` — Kafka consumer loop (manual offset commit for at-least-once delivery, `auto_offset_reset=latest` to skip cold-start backlog). Calls `score_windows()` every 10 s, prints JSON lines to stdout. Phase 3 will add the TimescaleDB write.
+
 **What you'll learn:** streaming feature engineering, sliding window aggregation, unsupervised anomaly detection, model serving inside a long-running consumer process, comparing classical ML vs. deep learning approaches on the same problem.
+
 
 ### 4.4 Time-Series Storage
 TimescaleDB (a Postgres extension) stores:
