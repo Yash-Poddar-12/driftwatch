@@ -42,15 +42,28 @@ Design notes (AGENTS.md §1 — explain every choice):
     boundary.  In practice our synthetic training data is pure normal traffic,
     so this adds a small safety margin without introducing false positives on
     real normal windows.
+
+7.  Per-service window sizes (BUG FIX — see ADR 0003):
+    Each service has a different EVENTS_PER_SECOND in docker-compose.yml:
+      auth-service      5 ev/s → ~150 events per 30 s window
+      payments-service  3 ev/s →  ~90 events per 30 s window
+      inventory-service 4 ev/s → ~120 events per 30 s window
+    The original code used window_size=150 for every synthetic sample,
+    matching only auth-service.  Payments-service windows (~90 events) landed
+    in the low tail of the request_count distribution the model learned,
+    causing ~33 % false-positive rate for that service in normal operation.
+    Fix: generate training windows for each service using their actual event
+    rate, and mix all three services equally in the training corpus.  One
+    shared model (not three separate ones) — see ADR 0003 for the tradeoff.
 """
 
 from __future__ import annotations
 
-import math
 import os
 import random
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import joblib
 import numpy as np
@@ -63,7 +76,8 @@ from features import WindowFeatures, extract_features
 # ---------------------------------------------------------------------------
 
 RANDOM_SEED: int = int(os.environ.get("RANDOM_SEED", "42"))
-N_SAMPLES: int = int(os.environ.get("N_TRAIN_SAMPLES", "5000"))
+N_SAMPLES: int = int(os.environ.get("N_TRAIN_SAMPLES", "6000"))  # divisible by 3 services
+WINDOW_SECONDS: float = 30.0   # must match WINDOW_SECONDS in docker-compose.yml
 MODELS_DIR: Path = Path(__file__).parent / "models"
 MODEL_PATH: Path = MODELS_DIR / "isolation_forest_v1.joblib"
 
@@ -73,13 +87,30 @@ MAX_SAMPLES: str | int = "auto"  # "auto" → min(256, n_samples); fast and gene
 CONTAMINATION: float = 0.05     # assumed anomaly fraction in training data
 
 # ---------------------------------------------------------------------------
+# Per-service traffic profiles — mirrors docker-compose.yml exactly.
+# ---------------------------------------------------------------------------
+
+class ServiceProfile(NamedTuple):
+    name: str
+    events_per_second: float  # from EVENTS_PER_SECOND env var in docker-compose.yml
+
+# These must be kept in sync with the SERVICE_NAME / EVENTS_PER_SECOND values
+# in docker-compose.yml (log-producer-auth, log-producer-payments,
+# log-producer-inventory).  If a new producer is added, add it here too.
+SERVICE_PROFILES: list[ServiceProfile] = [
+    ServiceProfile("auth-service",      events_per_second=5.0),
+    ServiceProfile("payments-service",  events_per_second=3.0),
+    ServiceProfile("inventory-service", events_per_second=4.0),
+]
+
+# ---------------------------------------------------------------------------
 # Synthetic normal-traffic distributions (mirror producer.py exactly)
 # ---------------------------------------------------------------------------
 
 # Status code weights copied verbatim from producer.py NORMAL_STATUS_WEIGHTS.
 _STATUS_CODES = [200, 201, 204, 400, 404, 500]
 _STATUS_WEIGHTS = [0.88, 0.05, 0.03, 0.02, 0.01, 0.01]
-_STATUS_WEIGHTS_CUM = []
+_STATUS_WEIGHTS_CUM: list[float] = []
 _cum = 0.0
 for _w in _STATUS_WEIGHTS:
     _cum += _w
@@ -105,48 +136,62 @@ def _sample_latency_ms(rng: random.Random) -> float:
 
 def _generate_normal_window(
     rng: random.Random,
-    service_name: str = "synthetic-service",
-    window_size: int = 150,   # ~30 s × 5 events/s; realistic for default producer rate
+    service: ServiceProfile,
+    window_seconds: float = WINDOW_SECONDS,
     now: float = 0.0,
 ) -> WindowFeatures:
     """
-    Build one synthetic normal-traffic window.
+    Build one synthetic normal-traffic window for a specific service.
 
-    window_size events drawn from the same distributions as producer.py's
-    normal mode.  We vary window_size slightly (±20 %) to simulate natural
-    traffic variance across 30-second windows.
+    window_size (expected event count) = events_per_second × window_seconds.
+    We vary it by ±20 % (Gaussian) to simulate natural throughput variance
+    across 30-second windows.
+
+    Why per-service window_size?
+    Each producer emits at a different rate (3 / 4 / 5 ev/s).  A model
+    trained only on 150-event windows will flag 90-event windows (payments)
+    as anomalous in the request_count dimension even when every other feature
+    is perfectly normal.  See train.py docstring note 7 and ADR 0003.
     """
-    n = max(10, int(rng.gauss(window_size, window_size * 0.2)))
+    base_count = service.events_per_second * window_seconds
+    n = max(10, int(rng.gauss(base_count, base_count * 0.2)))
     events = [
         {
             "latency_ms": _sample_latency_ms(rng),
             "status_code": _sample_status_code(rng),
-            "service_name": service_name,
+            "service_name": service.name,
             "timestamp": now,
         }
         for _ in range(n)
     ]
-    return extract_features(service_name, now, events)
+    return extract_features(service.name, now, events)
 
 
 def generate_training_data(
     n_samples: int = N_SAMPLES,
     seed: int = RANDOM_SEED,
+    window_seconds: float = WINDOW_SECONDS,
+    profiles: list[ServiceProfile] = SERVICE_PROFILES,
 ) -> np.ndarray:
     """
-    Generate n_samples synthetic normal-traffic feature vectors.
+    Generate n_samples synthetic normal-traffic feature vectors, sampling
+    each service's realistic event rate in equal proportion.
 
     Returns an (n_samples, 6) float64 array where the 6 columns are:
         [request_count, error_rate, p50_ms, p95_ms, p99_ms, status_entropy]
 
-    Each row is an independent window drawn from the same statistical
-    distributions that producer.py uses for normal traffic.
+    Equal mix across all services means the model learns the union of all
+    normal operating regions rather than over-fitting to whichever service
+    happens to produce the most events.  See ADR 0003.
     """
     rng = random.Random(seed)
     rows: list[list[float]] = []
     now = time.time()
-    for _ in range(n_samples):
-        wf = _generate_normal_window(rng, now=now)
+    n_profiles = len(profiles)
+    for i in range(n_samples):
+        # Round-robin across services → equal representation.
+        svc = profiles[i % n_profiles]
+        wf = _generate_normal_window(rng, service=svc, window_seconds=window_seconds, now=now)
         rows.append(wf.to_model_input())
     return np.array(rows, dtype=np.float64)
 
@@ -161,12 +206,14 @@ def train(
     save_path: Path = MODEL_PATH,
 ) -> IsolationForest:
     """
-    Train an Isolation Forest on synthetic normal-traffic data and save it.
+    Train an Isolation Forest on per-service synthetic normal-traffic data
+    and save it.
 
     Parameters
     ----------
     n_samples : int
-        Number of synthetic normal windows to train on.
+        Total number of synthetic normal windows to train on (split equally
+        across all SERVICE_PROFILES).
     seed : int
         RNG seed for reproducibility.
     save_path : Path
@@ -177,10 +224,16 @@ def train(
     IsolationForest
         The fitted model (also persisted to save_path).
     """
-    print(f"[train] Generating {n_samples} synthetic normal-traffic windows …")
+    print(f"[train] Generating {n_samples} synthetic normal-traffic windows "
+          f"({n_samples // len(SERVICE_PROFILES)} per service) ...")
+    for svc in SERVICE_PROFILES:
+        base = svc.events_per_second * WINDOW_SECONDS
+        print(f"[train]   {svc.name}: {svc.events_per_second} ev/s "
+              f"-> ~{base:.0f} events/window (+/-20 %)")
+
     X = generate_training_data(n_samples=n_samples, seed=seed)
     print(f"[train] Training data shape: {X.shape}")
-    print(f"[train] Feature stats (mean):\n"
+    print(f"[train] Feature stats (mean across all services):\n"
           f"  request_count={X[:, 0].mean():.1f}, error_rate={X[:, 1].mean():.4f},\n"
           f"  p50={X[:, 2].mean():.1f} ms, p95={X[:, 3].mean():.1f} ms,\n"
           f"  p99={X[:, 4].mean():.1f} ms, status_entropy={X[:, 5].mean():.4f}")
