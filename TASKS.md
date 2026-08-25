@@ -24,10 +24,10 @@
 ## Phase 3 — Storage + Dashboard (local)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Add TimescaleDB to `docker-compose.yml` + schema | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
-| Wire detector output into TimescaleDB | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
-| Add Grafana + provision dashboard JSON | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
-| `scripts/seed_anomalies.py` for demo/testing | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
+| Add TimescaleDB to `docker-compose.yml` + schema | ✅ | Antigravity / Claude Sonnet 4.6 | `timescale/timescaledb:latest-pg16`, `timescaledb-data` named volume, `infra/timescaledb/init.sql` auto-runs on first boot creating `metrics` + `anomalies` hypertables with 1-day chunks and service_name indexes. ADR: `docs/decisions/0004-timescaledb-storage.md`. |
+| Wire detector output into TimescaleDB | ✅ | Antigravity / Claude Sonnet 4.6 | `psycopg2-binary==2.9.12` added to requirements. `_connect_db()` (10-attempt retry), `_write_results()` (batch inserts via `execute_values`). Stdout JSON logging preserved. Live verified: 153 metric rows + 5 anomaly rows written during single test run. |
+| Add Grafana + provision dashboard JSON | ✅ | Antigravity / Claude Sonnet 4.6 | `grafana/grafana-oss:13.0.2`, 8-panel dashboard provisioned via config files (datasources.yml + dashboards.yml + driftwatch.json). Panels: request count, error rate, p50/p95/p99 latency, anomaly score (red-dot override on flagged windows), status entropy, anomaly event table, summary stats. URL: http://localhost:3000. |
+| `scripts/seed_anomalies.py` for demo/testing | ✅ | Antigravity / Claude Sonnet 4.6 | CLI: `--service`, `--mode` (latency_spike/error_burst/unusual_status), `--duration`. Spawns `docker compose run --rm` with ANOMALY_MODE, streams output, auto-stops. Follow-up: run seed + confirm Grafana red dots in Phase 3 sign-off. |
 
 ## Phase 4 — Kubernetes (local, Kind/Minikube)
 | Task | Status | Assigned Tool | Notes |
