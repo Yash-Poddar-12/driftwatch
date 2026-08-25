@@ -24,10 +24,10 @@
 ## Phase 3 — Storage + Dashboard (local)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Add TimescaleDB to `docker-compose.yml` + schema | ⬜ | — | |
-| Wire detector output into TimescaleDB | ⬜ | — | |
-| Add Grafana + provision dashboard JSON | ⬜ | — | |
-| `scripts/seed_anomalies.py` for demo/testing | ⬜ | — | |
+| Add TimescaleDB to `docker-compose.yml` + schema | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
+| Wire detector output into TimescaleDB | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
+| Add Grafana + provision dashboard JSON | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
+| `scripts/seed_anomalies.py` for demo/testing | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase3-storage-dashboard` |
 
 ## Phase 4 — Kubernetes (local, Kind/Minikube)
 | Task | Status | Assigned Tool | Notes |

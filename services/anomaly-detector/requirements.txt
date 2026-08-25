@@ -2,3 +2,8 @@ scikit-learn==1.9.0
 kafka-python-ng==2.2.3
 numpy==2.2.6
 joblib==1.5.1
+# psycopg2-binary 2.9.12 — current stable (as of 2026-08).
+# The -binary variant bundles libpq so no system postgres client install is
+# needed inside the container.  For production, consider building from source
+# (psycopg2 without -binary) to avoid bundled libpq version mismatch warnings.
+psycopg2-binary==2.9.12

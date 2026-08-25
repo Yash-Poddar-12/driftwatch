@@ -1,0 +1,31 @@
+# dashboards.yml — Grafana dashboard provisioning config
+#
+# Design notes (AGENTS.md §1):
+#
+# This file tells Grafana WHERE to find dashboard JSON files on disk.
+# The `path` points to the directory we mount in docker-compose.yml.
+# Grafana scans this directory on startup and on a configurable interval
+# (updateIntervalSeconds), so you can drop new dashboard JSON files in
+# and have them appear without restarting Grafana.
+#
+# disableDeletion: true — prevent Grafana from removing dashboards
+#   that existed on disk but have since been deleted from the folder.
+#   Safer default for a repo-managed setup.
+#
+# allowUiUpdates: false — changes made through the Grafana UI are
+#   NOT persisted back to disk.  This prevents the repo version from
+#   silently diverging from what's running.  To update a dashboard,
+#   edit the JSON file in the repo and restart (or wait for the poll).
+
+apiVersion: 1
+
+providers:
+  - name: DriftWatch Dashboards
+    orgId: 1
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

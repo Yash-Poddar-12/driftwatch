@@ -122,6 +122,131 @@ services:
       # Without this, every restart clears all topics and offsets.
       - kafka-data:/tmp/kraft-combined-logs
 
+  # ── TimescaleDB (Phase 3) ────────────────────────────────────────────────── #
+  #
+  # WHY timescale/timescaledb:latest-pg16?
+  #   TimescaleDB tags by Postgres major version rather than a single numeric
+  #   release (their standard convention, analogous to postgres:16).
+  #   latest-pg16 always pulls the most recent TimescaleDB release built
+  #   against Postgres 16, which is the current LTS Postgres version.
+  #
+  # WHY not use the standard postgres image?
+  #   TimescaleDB extends Postgres with automatic time-based chunking
+  #   (hypertables), efficient time-range queries, and compression — none of
+  #   which are available in the vanilla postgres image.  The timescaledb
+  #   image IS Postgres (same binary), just with the extension pre-installed.
+  #
+  # WHY mount init.sql via /docker-entrypoint-initdb.d/?
+  #   Postgres (and TimescaleDB) automatically runs any .sql or .sh files in
+  #   this directory on the FIRST boot (when the data directory is empty).
+  #   This is the standard Postgres pattern for seeding schemas without a
+  #   manual psql step.  On subsequent restarts the data directory already
+  #   exists so the init scripts are skipped, preventing re-creation errors.
+  #
+  # WHY a named volume (timescaledb-data)?
+  #   Named volumes persist across `docker compose down` + `up` cycles.
+  #   Anonymous volumes (no name) are deleted by `docker compose down -v`.
+  #   For a database this distinction is critical — losing all your metrics
+  #   data on every restart defeats the purpose of having a database.
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescaledb
+    networks:
+      - driftwatch
+    ports:
+      # 5432 exposed to the host so you can query directly with psql:
+      #   psql -h localhost -U driftwatch -d driftwatch
+      # (useful for the verification step in Phase 3 — "did rows land?")
+      - "5432:5432"
+    environment:
+      # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB are the standard
+      # Postgres env vars consumed by the entrypoint script to create the
+      # initial superuser and database.
+      #
+      # NEVER commit real values here.  In local dev these come from .env
+      # (which is .gitignored).  In production (EKS) they come from a K8s
+      # Secret mounted as env vars.
+      POSTGRES_USER: "${TIMESCALEDB_USER:-driftwatch}"
+      POSTGRES_PASSWORD: "${TIMESCALEDB_PASSWORD:-driftwatch_dev_pw}"
+      POSTGRES_DB: "${TIMESCALEDB_DB:-driftwatch}"
+    healthcheck:
+      # pg_isready checks whether Postgres is accepting connections.
+      # -U and -d match the credentials above.
+      # We wait for this before the anomaly-detector starts so that the
+      # detector's DB connection attempt doesn't fail on a cold start.
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U ${TIMESCALEDB_USER:-driftwatch} -d ${TIMESCALEDB_DB:-driftwatch}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      # Init script: runs once on first boot, creates hypertables.
+      - ./infra/timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Persist the database across restarts.
+      - timescaledb-data:/var/lib/postgresql/data
+
+  # ── Grafana (Phase 3) ────────────────────────────────────────────────────── #
+  #
+  # WHY grafana/grafana-oss:13.0.2?
+  #   Pinned to the current stable release (verified current).
+  #   OSS = the open-source edition (no Enterprise features needed here).
+  #   Pinning the version means the dashboard JSON in the repo was tested
+  #   against exactly this Grafana version — important because dashboard
+  #   schema versions do change across major releases.
+  #
+  # WHY provision via mounted config files instead of clicking in the UI?
+  #   Provisioning files are checked into the repo and auto-loaded at startup.
+  #   The datasource and dashboard JSON are version-controlled alongside the
+  #   code that produces the data.  This is "dashboard-as-code" (README §4.5).
+  #   Any developer cloning the repo gets the same dashboard on `docker compose up`.
+  #
+  # WHY GF_PATHS_PROVISIONING?
+  #   Grafana looks for provisioning YAML files in this directory.
+  #   We point it at the mounted volume containing datasources.yml and
+  #   dashboards.yml so Grafana reads them on startup.
+  #
+  # WHY GF_AUTH_ANONYMOUS_ENABLED for local dev?
+  #   Skipping login for local development removes friction when iterating
+  #   on the dashboard.  This MUST be disabled in production — use Grafana's
+  #   OAuth/LDAP integrations or a reverse proxy with auth instead.
+  grafana:
+    image: grafana/grafana-oss:13.0.2
+    container_name: grafana
+    networks:
+      - driftwatch
+    ports:
+      - "3000:3000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      # Grafana admin credentials (local dev only — never commit real values).
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+
+      # Point Grafana at the provisioning directory we mount below.
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+
+      # Disable login for local dev convenience.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+
+      # Credentials forwarded from Compose env → Grafana datasource provisioning.
+      # The datasources.yml reads these via ${TIMESCALEDB_USER} etc.
+      TIMESCALEDB_USER: "${TIMESCALEDB_USER:-driftwatch}"
+      TIMESCALEDB_PASSWORD: "${TIMESCALEDB_PASSWORD:-driftwatch_dev_pw}"
+      TIMESCALEDB_DB: "${TIMESCALEDB_DB:-driftwatch}"
+
+      # Disable telemetry / update checks for offline environments.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Mount the provisioning configs (datasources + dashboards YAML).
+      - ./services/dashboard-provisioning/grafana/provisioning:/etc/grafana/provisioning:ro
+    restart: unless-stopped
+
   # ── Log Producers ──────────────────────────────────────────────────────── #
   # Three replicas of the same image, each representing a different simulated
   # microservice in a different AWS region.  SERVICE_NAME and REGION are the
@@ -198,13 +323,19 @@ services:
 
   # ── Anomaly Detector ─────────────────────────────────────────────────────── #
   # Kafka consumer that scores each sliding window with a pre-trained Isolation
-  # Forest.  Phase 2 scope: prints (timestamp, service_name, anomaly_score,
-  # is_anomalous) to stdout.  TimescaleDB write is Phase 3.
+  # Forest and writes results to both stdout (for debugging, Phase 2 behaviour
+  # preserved) and TimescaleDB (Phase 3 addition).
   #
   # Why depends_on kafka only (not the producers)?
   #   The detector reads whatever is already in the topic — it doesn't need
   #   producers to be running.  This means you can start the detector alone for
   #   testing without spinning up the full producer fleet.
+  #
+  # Why depends_on timescaledb condition:service_healthy?
+  #   The detector opens a DB connection on startup.  If timescaledb isn't
+  #   ready yet, psycopg2.connect() raises an OperationalError.  We let the
+  #   health-check gate handle this rather than adding retry logic in Python
+  #   (though the Python code also retries, as a belt-and-suspenders approach).
   #
   # Why auto_offset_reset=latest?
   #   On first start there may be many minutes of backlog.  Replaying it would
@@ -222,6 +353,8 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      timescaledb:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       KAFKA_TOPIC: "logs.raw"
@@ -233,6 +366,11 @@ services:
       WINDOW_SECONDS: "30"
       WINDOW_SLIDE_SECONDS: "10"
       HEALTHZ_PORT: "8084"
+      # ── TimescaleDB connection ────────────────────────────────────────────── #
+      # Connection string for psycopg2.connect().  Credentials sourced from
+      # .env (local dev) or K8s Secret (production).  The defaults match the
+      # timescaledb service's POSTGRES_* env vars above.
+      TIMESCALEDB_URL: "postgresql://${TIMESCALEDB_USER:-driftwatch}:${TIMESCALEDB_PASSWORD:-driftwatch_dev_pw}@timescaledb:5432/${TIMESCALEDB_DB:-driftwatch}"
     ports:
       - "8084:8084"   # /healthz reachable at localhost:8084/healthz
     restart: unless-stopped
@@ -245,3 +383,6 @@ volumes:
   # Named volumes persist across container recreates; anonymous volumes do not.
   kafka-data:
 
+  # Named volume for TimescaleDB's Postgres data directory.
+  # Persists all metrics and anomaly rows across restarts.
+  timescaledb-data:

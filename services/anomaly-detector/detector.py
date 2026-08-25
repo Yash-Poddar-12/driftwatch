@@ -1,6 +1,6 @@
 """
 detector.py — Kafka consumer that scores each sliding window with the trained
-Isolation Forest and prints results to stdout.
+Isolation Forest, writes results to TimescaleDB, and prints to stdout.
 
 Design notes (AGENTS.md §1 — explain every choice):
 
@@ -36,7 +36,7 @@ Design notes (AGENTS.md §1 — explain every choice):
 6.  Anomaly threshold:
     IsolationForest.predict() returns +1 (normal) or -1 (anomaly).  We also
     expose the raw decision_function score (negative = more anomalous) so
-    downstream consumers (Phase 3 TimescaleDB) can plot a continuous signal
+    downstream consumers (TimescaleDB, Grafana) can plot a continuous signal
     rather than just a binary flag.
 
 7.  /healthz endpoint:
@@ -44,10 +44,21 @@ Design notes (AGENTS.md §1 — explain every choice):
     daemon thread.  Reports {"status": "ok"} if the consumer loop is running,
     {"status": "starting"} before the first successful poll.
 
-8.  TimescaleDB NOT wired up here (Phase 3 scope):
-    Scores are printed to stdout only.  Phase 3 will add a DB writer.  Keeping
-    the detector stateless (no DB connection) means it can restart freely and
-    scales horizontally without connection-pool issues.
+8.  TimescaleDB writer (Phase 3):
+    Each scored window is written to two tables:
+      - metrics: always (every window, normal + anomalous)
+      - anomalies: only when is_anomalous=True
+    psycopg2 is used (industry-standard sync Postgres driver, no event loop
+    complexity).  The connection is opened once at startup and reused; cursor
+    objects are created per-batch to avoid holding transactions open.
+    Stdout JSON logging is preserved so you can still `docker logs anomaly-detector`
+    and see real-time scores — useful for debugging without opening a DB client.
+
+9.  DB retry on startup:
+    psycopg2.connect() is retried with the same 5 s / 10-attempt loop as the
+    Kafka connection.  The docker-compose depends_on health-check gates startup,
+    but a belt-and-suspenders retry handles edge cases where the DB is briefly
+    unavailable after the health check passes.
 """
 
 from __future__ import annotations
@@ -57,12 +68,15 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
 import joblib
 import numpy as np
+import psycopg2
+import psycopg2.extras
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
@@ -97,6 +111,14 @@ WINDOW_SECONDS: float = float(os.environ.get("WINDOW_SECONDS", "30"))
 WINDOW_SLIDE_SECONDS: float = float(os.environ.get("WINDOW_SLIDE_SECONDS", "10"))
 POLL_TIMEOUT_MS: int = int(os.environ.get("POLL_TIMEOUT_MS", "1000"))
 HEALTHZ_PORT: int = int(os.environ.get("HEALTHZ_PORT", "8084"))
+
+# TIMESCALEDB_URL: standard libpq connection string.
+# Default matches the docker-compose.yml hardcoded defaults so the container
+# works out-of-the-box without a .env file for quick local testing.
+TIMESCALEDB_URL: str = os.environ.get(
+    "TIMESCALEDB_URL",
+    "postgresql://driftwatch:driftwatch_dev_pw@timescaledb:5432/driftwatch",
+)
 
 # ---------------------------------------------------------------------------
 # Global health flag (updated by the consumer loop)
@@ -180,6 +202,148 @@ def _build_consumer() -> KafkaConsumer:
 
 
 # ---------------------------------------------------------------------------
+# TimescaleDB writer
+# ---------------------------------------------------------------------------
+
+def _connect_db() -> "psycopg2.connection":
+    """
+    Open a psycopg2 connection to TimescaleDB with retry.
+
+    WHY psycopg2 (not psycopg3 / asyncpg)?
+      psycopg2 2.9.x is the de-facto standard synchronous Postgres driver,
+      battle-tested in production for 15+ years.  psycopg3 is the successor
+      but adds complexity (new API).  asyncpg is async-only and would require
+      an event loop incompatible with the simple synchronous consumer loop.
+      psycopg2-binary bundles the libpq C library — no system-level Postgres
+      client install needed inside the container.
+
+    WHY a single persistent connection (not a pool)?
+      The detector is single-threaded and writes in small batches every 10 s.
+      A connection pool adds complexity with no benefit here.  If we later add
+      multi-threaded polling, swap this for psycopg2's ThreadedConnectionPool
+      or use sqlalchemy's pool.
+    """
+    for attempt in range(1, 11):
+        try:
+            conn = psycopg2.connect(TIMESCALEDB_URL)
+            conn.autocommit = False  # explicit transaction control
+            log.info("Connected to TimescaleDB at attempt %d", attempt)
+            return conn
+        except psycopg2.OperationalError as exc:
+            log.warning(
+                "TimescaleDB not ready (attempt %d/10): %s — retrying in 5 s",
+                attempt,
+                exc,
+            )
+            time.sleep(5)
+    log.error("Could not connect to TimescaleDB after 10 attempts — exiting.")
+    raise SystemExit(1)
+
+
+def _write_results(
+    conn: "psycopg2.connection",
+    results: list[dict[str, Any]],
+    features_map: dict[str, Any],
+) -> None:
+    """
+    Write scored window results to TimescaleDB.
+
+    Inserts into:
+      - metrics (every window, normal + anomalous)
+      - anomalies (only flagged windows)
+
+    Uses executemany() with a list of tuples for efficiency — psycopg2
+    batches these into a single network round-trip via the C-level copy.
+
+    features_map: dict keyed by service_name → WindowFeatures namedtuple,
+    populated by the caller so we can include the full feature vector in
+    both tables.
+
+    WHY separate metrics + anomalies tables?
+      See init.sql comments.  Short answer: Grafana queries for the continuous
+      anomaly_score signal use metrics; anomaly event markers use the much
+      smaller anomalies table.  Separating them avoids a costly
+      WHERE is_anomalous=TRUE scan on the large metrics table.
+    """
+    if not results:
+        return
+
+    metrics_rows = []
+    anomaly_rows = []
+
+    for r in results:
+        svc = r["service_name"]
+        wf = features_map.get(svc)
+        ts = datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00"))
+
+        # Build the metrics row.
+        metrics_rows.append((
+            ts,
+            svc,
+            float(wf.request_count) if wf else 0.0,
+            float(wf.error_rate) if wf else 0.0,
+            float(wf.p50_latency_ms) if wf else 0.0,
+            float(wf.p95_latency_ms) if wf else 0.0,
+            float(wf.p99_latency_ms) if wf else 0.0,
+            float(wf.status_entropy) if wf else 0.0,
+            float(r["anomaly_score"]),
+            bool(r["is_anomalous"]),
+        ))
+
+        # Only write to anomalies if flagged.
+        if r["is_anomalous"]:
+            anomaly_rows.append((
+                ts,
+                svc,
+                float(r["anomaly_score"]),
+                float(wf.request_count) if wf else 0.0,
+                float(wf.error_rate) if wf else 0.0,
+                float(wf.p50_latency_ms) if wf else 0.0,
+                float(wf.p95_latency_ms) if wf else 0.0,
+                float(wf.p99_latency_ms) if wf else 0.0,
+                float(wf.status_entropy) if wf else 0.0,
+            ))
+
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO metrics
+                  (time, service_name, request_count, error_rate,
+                   p50_latency_ms, p95_latency_ms, p99_latency_ms,
+                   status_entropy, anomaly_score, is_anomalous)
+                VALUES %s
+                """,
+                metrics_rows,
+            )
+            if anomaly_rows:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO anomalies
+                      (time, service_name, anomaly_score, request_count,
+                       error_rate, p50_latency_ms, p95_latency_ms,
+                       p99_latency_ms, status_entropy)
+                    VALUES %s
+                    """,
+                    anomaly_rows,
+                )
+        conn.commit()
+        log.debug(
+            "Wrote %d metric rows, %d anomaly rows to TimescaleDB",
+            len(metrics_rows),
+            len(anomaly_rows),
+        )
+    except psycopg2.Error as exc:
+        log.error("DB write failed: %s — rolling back", exc)
+        conn.rollback()
+        # Don't raise — let the consumer loop continue; the next window
+        # will attempt another write.  Transient DB blips shouldn't kill
+        # the detector.
+
+
+# ---------------------------------------------------------------------------
 # Score a batch of feature vectors
 # ---------------------------------------------------------------------------
 
@@ -241,6 +405,9 @@ def run() -> None:
     model = joblib.load(ANOMALY_MODEL_PATH)
     log.info("Model loaded: %s", model)
 
+    # Connect to TimescaleDB.
+    db_conn = _connect_db()
+
     # Connect to Kafka with retry.
     consumer: KafkaConsumer | None = None
     for attempt in range(1, 11):
@@ -290,11 +457,19 @@ def run() -> None:
             if accumulator.should_emit(now):
                 windows = accumulator.emit_windows(now)
                 results = score_windows(model, windows)
+
+                # Build a map of service_name → WindowFeatures for the DB writer.
+                features_map = {wf.service_name: wf for wf in windows}
+
                 for r in results:
-                    # Phase 2: print to stdout only.
-                    # Phase 3 will add: write r to TimescaleDB.
+                    # Stdout JSON logging (Phase 2 behaviour, preserved).
+                    # Useful for `docker logs anomaly-detector` debugging.
                     print(json.dumps(r), flush=True)
-                # Commit offsets after successful window emission.
+
+                # Write to TimescaleDB (Phase 3).
+                _write_results(db_conn, results, features_map)
+
+                # Commit offsets after successful window emission + DB write.
                 consumer.commit()
 
     except KeyboardInterrupt:
@@ -302,6 +477,9 @@ def run() -> None:
     finally:
         consumer.close()
         log.info("Consumer closed.")
+        if db_conn and not db_conn.closed:
+            db_conn.close()
+            log.info("DB connection closed.")
 
 
 if __name__ == "__main__":

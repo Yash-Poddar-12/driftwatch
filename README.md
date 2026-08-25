@@ -166,22 +166,37 @@ The ML core of the system. A Kafka consumer service that:
 
 
 ### 4.4 Time-Series Storage
-TimescaleDB (a Postgres extension) stores:
-- `metrics` hypertable: per-window aggregated stats per service
-- `anomalies` hypertable: flagged anomalous windows with scores
+TimescaleDB (`timescale/timescaledb:latest-pg16`) stores every scored sliding window:
+- `metrics` hypertable — every window (normal + anomalous), with the full feature vector (request_count, error_rate, p50/p95/p99 latency, status_entropy) + anomaly_score + is_anomalous flag. Written on every `emit_windows()` call.
+- `anomalies` hypertable — flagged windows only (is_anomalous=true), with a feature snapshot. Grafana uses this smaller table for anomaly event markers without scanning the large metrics table.
 
-Chosen over InfluxDB for this project because it's SQL-based (lower learning curve if you already know Postgres) while still being purpose-built for time-series workloads (automatic partitioning by time, efficient range queries).
+Both tables are hypertables partitioned by `time` (1-day chunks). The `init.sql` schema at `infra/timescaledb/init.sql` mounts into `/docker-entrypoint-initdb.d/` and runs automatically on the first boot.
 
-**What you'll learn:** time-series data modeling, hypertables, retention policies, writing efficient time-range queries.
+**Port:** 5432 exposed to the host for direct `psql` queries.
+**Driver:** `psycopg2-binary==2.9.12` in the anomaly-detector's requirements.txt.
+
+Chosen over InfluxDB for this project because it's SQL-based (lower learning curve if you already know Postgres) while still being purpose-built for time-series workloads. See ADR `docs/decisions/0004-timescaledb-storage.md`.
+
+**What you'll learn:** time-series data modeling, hypertables, automatic chunk-based partitioning, efficient time-range queries with TimescaleDB's chunk exclusion.
 
 ### 4.5 Grafana Dashboard
-Connects to TimescaleDB and renders:
-- Request rate and error rate per service over time
-- Latency percentiles per service
-- Anomaly score over time, with flagged points highlighted distinctly
-- Optional Grafana alerting rule that fires when anomaly score crosses a threshold
+Grafana (`grafana/grafana-oss:13.0.2`) connects to TimescaleDB and renders 8 panels:
+- Request count per sliding window, per service
+- Error rate per service (with a 5% threshold line)
+- Latency percentiles (p50 / p95 / p99) per service
+- Anomaly score over time — normal windows as a continuous line, flagged windows (is_anomalous=true) as large red dots using a field override
+- Status code entropy per service
+- Anomaly event log table (most recent 100 flagged windows)
+- Summary stat panels: total anomalies, avg error rate, avg p99 in the selected time window
 
-**What you'll learn:** data source provisioning, dashboard-as-code (JSON dashboard definitions checked into the repo), basic alerting configuration.
+Provisions via config files (no UI clicking):
+- `services/dashboard-provisioning/grafana/provisioning/datasources/datasources.yml` — TimescaleDB datasource
+- `services/dashboard-provisioning/grafana/provisioning/dashboards/dashboards.yml` — dashboard file provider
+- `services/dashboard-provisioning/grafana/provisioning/dashboards/driftwatch.json` — the dashboard definition
+
+**URL:** http://localhost:3000 (anonymous access enabled in local dev).
+
+**What you'll learn:** dashboard-as-code (JSON dashboard definitions checked into the repo), datasource provisioning via YAML, field overrides for conditional styling (anomaly red dots), annotation overlays.
 
 ### 4.6 Docker
 Every service gets its own `Dockerfile`:
@@ -303,4 +318,4 @@ This temporarily spikes latency/error rate for the named service so you can conf
 ---
 
 ## 11. License
-MIT (or your preference — update before publishing).
+MIT
