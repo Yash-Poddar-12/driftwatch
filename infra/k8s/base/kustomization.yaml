@@ -1,0 +1,85 @@
+# infra/k8s/base/kustomization.yaml
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# WHY Kustomize instead of plain kubectl apply -f?
+#   Kustomize lets us have a single base definition and layer environment-
+#   specific patches on top (overlays/local, overlays/prod) without forking
+#   the YAML.  The same base manifests are used for Kind locally and EKS in
+#   production — only resource limits, replica counts, and storage classes
+#   differ between environments, and those are expressed as strategic merge
+#   patches in the overlay, not as duplicate files.
+#
+# WHY configMapGenerator instead of a hand-written ConfigMap YAML?
+#   configMapGenerator reads files from disk at apply time and:
+#   1. Hashes the content into the ConfigMap name (e.g. grafana-datasources-7f4bc2)
+#   2. Patches all references in the same kustomization to use the hashed name
+#   This means when you change datasources.yml, Kustomize generates a new
+#   ConfigMap name, which triggers a rolling update of any Deployment that
+#   references it — without needing to manually bump a version.
+#   It also keeps the source of truth as the actual file (not a YAML-embedded
+#   string), making diffs much cleaner.
+#
+# WHY list resources in explicit order?
+#   kubectl apply (with Kustomize) handles dependencies automatically, but
+#   listing resources in dependency order (ConfigMap/Secret first, then
+#   StatefulSets, then Deployments) makes the intent clear and ensures
+#   readability — a human reading this file sees the startup order.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ── Namespace ────────────────────────────────────────────────────────────────
+# All resources go into the 'default' namespace for local dev.
+# The prod overlay will patch this to 'driftwatch-prod'.
+namespace: default
+
+# ── Resources ────────────────────────────────────────────────────────────────
+# Listed in dependency order: shared config → stateful infra → stateless services
+resources:
+  - configmap.yaml
+  - secret.yaml
+  - kafka.yaml
+  - timescaledb.yaml
+  - log-producers.yaml
+  - anomaly-detector.yaml
+  - grafana.yaml
+
+# ── ConfigMap generators ──────────────────────────────────────────────────── #
+# These read files from disk and generate ConfigMaps with content-hashed names.
+# Referencing pods pick up the new name automatically on the next apply,
+# triggering a rolling restart whenever the source file changes.
+configMapGenerator:
+  # TimescaleDB init schema — mounted into /docker-entrypoint-initdb.d/
+  # Source: infra/timescaledb/init.sql (copied here — Kustomize requires files
+  # to be within or below the kustomization root directory).
+  - name: timescaledb-init-sql
+    files:
+      - init.sql=init.sql
+
+  # Grafana datasource provisioning
+  - name: grafana-datasources
+    files:
+      - datasources.yml=datasources.yml
+
+  # Grafana dashboard provider config (dashboards.yml)
+  - name: grafana-dashboards-config
+    files:
+      - dashboards.yml=dashboards.yml
+
+  # Grafana dashboard JSON definition
+  - name: grafana-dashboard-json
+    files:
+      - driftwatch.json=driftwatch.json
+
+# ── ConfigMap generator options ──────────────────────────────────────────── #
+# disableNameSuffixHash: true → configMapGenerator creates ConfigMaps with
+# STABLE names (e.g. "grafana-datasources", not "grafana-datasources-7f4bc2").
+# WHY disable hashing?
+#   Content-hashed names are a Kustomize best practice in production because
+#   they trigger rolling restarts on config changes automatically.  However,
+#   in our manifests we reference ConfigMap names directly in volume specs.
+#   With hashing disabled, the references always resolve — there's no risk
+#   of a manifest referencing a stale hashed name.
+#   The prod overlay can re-enable hashing once the pipeline is stable.
+generatorOptions:
+  disableNameSuffixHash: true

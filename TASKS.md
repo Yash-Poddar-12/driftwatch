@@ -32,9 +32,9 @@
 ## Phase 4 — Kubernetes (local, Kind/Minikube)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Base K8s manifests (`infra/k8s/base/`) | ⬜ | — | |
-| Local overlay (`infra/k8s/overlays/local/`) | ⬜ | — | |
-| Verify full pipeline running on Kind/Minikube | ⬜ | — | |
+| Base K8s manifests (`infra/k8s/base/`) | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase4-kubernetes` |
+| Local overlay (`infra/k8s/overlays/local/`) | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase4-kubernetes` |
+| Verify full pipeline running on Kind/Minikube | 🟨 | Antigravity / Claude Sonnet 4.6 | branch: `agent/antigravity/phase4-kubernetes` |
 
 ## Phase 5 — CI Pipeline
 | Task | Status | Assigned Tool | Notes |

@@ -1,0 +1,121 @@
+# infra/k8s/overlays/local/kustomization.yaml
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# ── WHY an overlay? ──────────────────────────────────────────────────────────
+#   The base/ manifests describe WHAT the system is (all services, their
+#   topology, probe paths, port numbers).  The overlay describes HOW to
+#   configure it for a specific environment — in this case, a laptop running
+#   Kind.
+#
+#   Local concerns that differ from production:
+#   1. Resource limits: A laptop has 8-16 GB RAM shared with everything else.
+#      The base limits (designed for EKS node types) would cause OOMKilled
+#      pods or evictions.  The local overlay halves memory limits.
+#   2. Storage class: Kind uses standard (the default kind StorageClass backed
+#      by hostPath on the Kind node container).  EKS uses gp3 EBS volumes.
+#      We don't patch storage class here because Kind's default StorageClass
+#      (standard) is already the cluster default — no explicit storageClassName
+#      needed.  In the prod overlay we'd add storageClassName: gp3.
+#   3. Replica counts: No HA needed locally.  base is already replicas: 1
+#      everywhere, so no patch needed here either.
+#
+# ── WHY patches instead of overlaying the whole file? ────────────────────────
+#   Strategic merge patches only override the fields you specify; everything
+#   else comes from base.  This minimises the divergence between local and
+#   prod — if you add a new env var in base/anomaly-detector.yaml, local
+#   automatically inherits it without a manual sync step.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Reference the base layer
+resources:
+  - ../../base
+
+# ── Namespace ─────────────────────────────────────────────────────────────── #
+# Override base namespace for local — keep everything in 'default' for Kind.
+namespace: default
+
+# ── Resource patches (strategic merge) ────────────────────────────────────── #
+# Reduce resource limits so all pods fit comfortably on a single Kind node.
+# Kind runs as a Docker container; the default Kind node has ~2 CPUs and
+# ~6-8 GB RAM shared with the host.  Conservative limits prevent OOMKilled.
+#
+# The patch format is a partial manifest — only the fields being overridden
+# are included.  Kubernetes merges this on top of the full base manifest.
+patches:
+  # ── Kafka: reduce JVM heap pressure ────────────────────────────────────── #
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: kafka
+      spec:
+        template:
+          spec:
+            containers:
+              - name: kafka
+                resources:
+                  requests:
+                    cpu: "200m"
+                    memory: "384Mi"
+                  limits:
+                    cpu: "500m"
+                    memory: "768Mi"
+
+  # ── TimescaleDB: reduce memory for local ───────────────────────────────── #
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: timescaledb
+      spec:
+        template:
+          spec:
+            containers:
+              - name: timescaledb
+                resources:
+                  requests:
+                    cpu: "100m"
+                    memory: "128Mi"
+                  limits:
+                    cpu: "300m"
+                    memory: "256Mi"
+
+  # ── Anomaly detector: reduce for local ─────────────────────────────────── #
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: anomaly-detector
+      spec:
+        template:
+          spec:
+            containers:
+              - name: anomaly-detector
+                resources:
+                  requests:
+                    cpu: "50m"
+                    memory: "128Mi"
+                  limits:
+                    cpu: "300m"
+                    memory: "256Mi"
+
+  # ── Grafana: reduce for local ───────────────────────────────────────────── #
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: grafana
+      spec:
+        template:
+          spec:
+            containers:
+              - name: grafana
+                resources:
+                  requests:
+                    cpu: "50m"
+                    memory: "64Mi"
+                  limits:
+                    cpu: "150m"
+                    memory: "128Mi"

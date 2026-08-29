@@ -1,0 +1,215 @@
+# kafka.yaml — Kafka StatefulSet + headless Service + ClusterIP Service
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# ── WHY StatefulSet instead of Deployment? ────────────────────────────────── #
+# This is the single most important interview question for this component:
+#
+#   1. STABLE NETWORK IDENTITY:
+#      Kafka brokers advertise their own hostname to producers and consumers
+#      in the metadata response.  A Deployment gives pods random names
+#      (e.g. kafka-7d9f4-xkqp2) that change on every restart.  A StatefulSet
+#      gives pods ordinal names: kafka-0, kafka-1, kafka-2.  This means the
+#      bootstrap server address (kafka-0.kafka-headless:9092) is predictable
+#      and doesn't break when the pod restarts.
+#
+#   2. STABLE PERSISTENT STORAGE (volumeClaimTemplates):
+#      Kafka stores all topic data on disk (/tmp/kraft-combined-logs).
+#      A StatefulSet's volumeClaimTemplate creates a dedicated PVC per pod
+#      (kafka-data-kafka-0) and reattaches the SAME PVC when that pod
+#      restarts — even on a different node.  A Deployment with a regular
+#      PVC creates one volume shared across replicas (wrong) or no
+#      guaranteed reattachment on reschedule.
+#
+#   3. ORDERED STARTUP/SHUTDOWN:
+#      StatefulSets start pods in order (0, 1, 2...) and shut down in
+#      reverse.  For a Kafka cluster, the controller (pod 0) must be up
+#      before the brokers try to register.
+#
+# ── WHY headless Service? ─────────────────────────────────────────────────── #
+#   A headless Service (clusterIP: None) does not get a virtual IP.
+#   Instead, DNS queries return the IPs of all matching pods directly.
+#   For StatefulSets, each pod also gets a predictable DNS A record:
+#     kafka-0.kafka-headless.default.svc.cluster.local → pod-0's IP
+#   This is how the ConfigMap's KAFKA_BOOTSTRAP_SERVERS resolves to the
+#   actual broker.  Without the headless Service, pod-level DNS doesn't work.
+#
+# ── WHY also a regular ClusterIP Service? ─────────────────────────────────── #
+#   The headless service is for stable pod DNS.  The regular ClusterIP
+#   service (kafka:9092) gives other pods a single stable endpoint that
+#   Kubernetes load-balances.  For a single-broker setup this is
+#   redundant, but it's good practice and makes multi-broker scaling
+#   straightforward later (just add replicas; client config stays the same).
+#
+# ── KRaft config ──────────────────────────────────────────────────────────── #
+#   Same as docker-compose.yml: KAFKA_PROCESS_ROLES=broker,controller,
+#   KAFKA_LISTENERS on :9092 (broker) and :9093 (controller Raft).
+#   KAFKA_ADVERTISED_LISTENERS uses the headless-service DNS name so
+#   in-cluster clients resolve kafka-0.kafka-headless correctly.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  labels:
+    app: kafka
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  # clusterIP: None makes this a headless service.
+  # This is what gives each StatefulSet pod its stable DNS entry:
+  #   kafka-0.kafka-headless.default.svc.cluster.local
+  clusterIP: None
+  selector:
+    app: kafka
+  ports:
+    - name: broker
+      port: 9092
+      targetPort: 9092
+    - name: controller
+      port: 9093
+      targetPort: 9093
+---
+# ClusterIP service for convenient single-endpoint access within the cluster.
+# Other services can use kafka:9092 as a simpler alternative to the headless DNS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  labels:
+    app: kafka
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  selector:
+    app: kafka
+  ports:
+    - name: broker
+      port: 9092
+      targetPort: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  labels:
+    app: kafka
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  serviceName: kafka-headless   # REQUIRED: ties pods to the headless service for DNS
+  replicas: 1                   # single-broker for local dev; scale to 3 for HA in prod
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:4.3.1   # pinned per AGENTS.md rule 5
+          ports:
+            - containerPort: 9092   # broker
+              name: broker
+            - containerPort: 9093   # KRaft controller
+              name: controller
+          env:
+            # ── KRaft cluster identity ──────────────────────────────────────── #
+            - name: KAFKA_KRAFT_CLUSTER_ID
+              value: "driftwatch-local-dev-cluster-01"
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka-0.kafka-headless.default.svc.cluster.local:9093"
+
+            # ── Listeners ───────────────────────────────────────────────────── #
+            # LISTENERS: what Kafka BINDS to inside the container.
+            #   CONTROLLER: bind on 0.0.0.0:9093 (all interfaces) for Raft traffic.
+            #   PLAINTEXT: bind on 0.0.0.0:9092 for broker client connections.
+            # ADVERTISED_LISTENERS: what clients are TOLD to reconnect to.
+            #   PLAINTEXT: the headless DNS name so in-cluster clients resolve to pod.
+            # IMPORTANT: KAFKA_LISTENERS binds to 0.0.0.0 (all interfaces),
+            # while KAFKA_CONTROLLER_QUORUM_VOTERS uses the stable headless DNS
+            # so the KRaft controller can find itself (and peers in multi-broker).
+            - name: KAFKA_LISTENERS
+              value: "CONTROLLER://0.0.0.0:9093,PLAINTEXT://0.0.0.0:9092"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka-0.kafka-headless.default.svc.cluster.local:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+
+            # ── Topic / retention defaults ──────────────────────────────────── #
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "3"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_LOG_RETENTION_HOURS
+              value: "24"
+
+          # ── Health probes ─────────────────────────────────────────────────── #
+          # Same health check as docker-compose: kafka-topics.sh --list confirms
+          # the broker is fully ready (not just that the process started).
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+
+          # ── Resources ─────────────────────────────────────────────────────── #
+          # requests: guaranteed allocation; limits: hard cap.
+          # Kafka is the most memory-hungry service here (JVM heap).
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          # ── Volume mount ──────────────────────────────────────────────────── #
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /tmp/kraft-combined-logs
+
+  # ── volumeClaimTemplates ──────────────────────────────────────────────────── #
+  # This is the StatefulSet superpower: each pod gets its OWN PVC.
+  # Pod kafka-0 gets PVC kafka-data-kafka-0; kafka-1 gets kafka-data-kafka-1.
+  # When kafka-0 restarts (even on a different node), Kubernetes reattaches
+  # kafka-data-kafka-0 — preserving all topic data and offsets.
+  # A Deployment with a shared PVC cannot guarantee this per-pod affinity.
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]   # one node at a time (fine for StatefulSet)
+        resources:
+          requests:
+            storage: 1Gi
