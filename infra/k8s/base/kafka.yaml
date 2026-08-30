@@ -160,27 +160,38 @@ spec:
               value: "24"
 
           # ── Health probes ─────────────────────────────────────────────────── #
-          # Same health check as docker-compose: kafka-topics.sh --list confirms
-          # the broker is fully ready (not just that the process started).
+          # WHY nc (netcat) instead of kafka-topics.sh?
+          #   kafka-topics.sh spawns a SECOND JVM (~256 Mi of heap) to run the
+          #   AdminClient.  With a 768 Mi container limit the probe JVM was being
+          #   OOMKilled (exit 137) before it could return, making the probe look
+          #   like a failure even when Kafka was healthy.
+          #   Switching to a pure TCP check on port 9092 confirms the broker
+          #   socket is open at zero additional memory cost.  Port 9092 only
+          #   becomes reachable after Kafka has finished the KRaft leader election
+          #   and the SocketServer has started accepting connections, so it is a
+          #   reliable readiness signal.
+          #   In production on EKS (higher memory limits), kafka-topics.sh is
+          #   preferred because it validates actual metadata fetch; a comment in
+          #   the prod overlay should switch it back.
           readinessProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1
+                - "nc -z localhost 9092"
             initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 10
-            failureThreshold: 10
+            timeoutSeconds: 5
+            failureThreshold: 15
           livenessProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1
+                - "nc -z localhost 9092"
             initialDelaySeconds: 60
             periodSeconds: 30
-            timeoutSeconds: 10
+            timeoutSeconds: 5
             failureThreshold: 5
 
           # ── Resources ─────────────────────────────────────────────────────── #

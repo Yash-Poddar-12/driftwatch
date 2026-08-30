@@ -44,7 +44,10 @@ namespace: default
 # The patch format is a partial manifest — only the fields being overridden
 # are included.  Kubernetes merges this on top of the full base manifest.
 patches:
-  # ── Kafka: reduce JVM heap pressure ────────────────────────────────────── #
+  # ── Kafka: JVM needs headroom for broker + probe ────────────────────────── #
+  # WHY 1.5Gi?  Kafka 4.x JVM heap alone is ~512Mi.  The kafka-topics.sh
+  # readiness probe spawns a SECOND JVM (~256Mi).  768Mi was causing the probe
+  # JVM to be OOMKilled (exit code 137).  1.5Gi gives comfortable headroom.
   - patch: |-
       apiVersion: apps/v1
       kind: StatefulSet
@@ -58,10 +61,10 @@ patches:
                 resources:
                   requests:
                     cpu: "200m"
-                    memory: "384Mi"
-                  limits:
-                    cpu: "500m"
                     memory: "768Mi"
+                  limits:
+                    cpu: "1000m"
+                    memory: "1536Mi"
 
   # ── TimescaleDB: reduce memory for local ───────────────────────────────── #
   - patch: |-
@@ -101,7 +104,9 @@ patches:
                     cpu: "300m"
                     memory: "256Mi"
 
-  # ── Grafana: reduce for local ───────────────────────────────────────────── #
+  # ── Grafana: 256Mi for dashboard rendering ─────────────────────────────── #
+  # WHY 256Mi?  Grafana 13.x needs ~100-150Mi baseline; the 128Mi limit was
+  # too tight and caused the process to crash immediately on startup.
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -115,7 +120,7 @@ patches:
                 resources:
                   requests:
                     cpu: "50m"
-                    memory: "64Mi"
-                  limits:
-                    cpu: "150m"
                     memory: "128Mi"
+                  limits:
+                    cpu: "300m"
+                    memory: "256Mi"
