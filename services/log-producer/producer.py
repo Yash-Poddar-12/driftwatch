@@ -55,9 +55,7 @@ log = logging.getLogger("log-producer")
 # ---------------------------------------------------------------------------
 # Configuration — all tunables come from environment variables (README §2.3).
 # ---------------------------------------------------------------------------
-KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get(
-    "KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"
-)
+KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC: str = os.environ.get("KAFKA_TOPIC", "logs.raw")
 SERVICE_NAME: str = os.environ.get("SERVICE_NAME", "unknown-service")
 REGION: str = os.environ.get("REGION", "us-east-1")
@@ -103,6 +101,7 @@ ERROR_MESSAGES = [
 # ---------------------------------------------------------------------------
 # Event generation
 # ---------------------------------------------------------------------------
+
 
 def _normal_latency_ms() -> float:
     """Log-normal latency with median ~80 ms, realistic long tail."""
@@ -169,6 +168,7 @@ def build_event() -> dict[str, Any]:
 # /healthz  (AGENTS.md rule 6 — every service needs a health-check endpoint)
 # ---------------------------------------------------------------------------
 
+
 class _HealthHandler(BaseHTTPRequestHandler):
     """Minimal HTTP handler — responds 200 OK to GET /healthz."""
 
@@ -200,6 +200,7 @@ def _start_healthz_server() -> None:
 # ---------------------------------------------------------------------------
 # Kafka producer
 # ---------------------------------------------------------------------------
+
 
 def _build_producer() -> KafkaProducer:
     """
@@ -267,7 +268,9 @@ def run() -> None:
             producer.send(KAFKA_TOPIC, value=event).add_errback(_on_send_error)
             sent += 1
             if sent % 100 == 0:
-                log.info("Published %d events (latest status=%s)", sent, event["status_code"])
+                log.info(
+                    "Published %d events (latest status=%s)", sent, event["status_code"]
+                )
             time.sleep(sleep_s)
     except KeyboardInterrupt:
         log.info("Shutdown signal received — flushing and closing producer.")

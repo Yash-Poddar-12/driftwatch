@@ -190,8 +190,7 @@ def check_stack_running(project_name: str, compose_service: str) -> None:
     # The container_name in our compose is e.g. "log-producer-payments"
     # (without project prefix).
     matches = [
-        c for c in running_containers
-        if compose_service in c or expected_named in c
+        c for c in running_containers if compose_service in c or expected_named in c
     ]
     if not matches:
         print(
@@ -233,17 +232,25 @@ def run_anomaly_producer(
     eps = str(events_per_second) if events_per_second else svc_meta["EVENTS_PER_SECOND"]
 
     cmd = [
-        "docker", "compose",
-        "--project-name", project_name,
+        "docker",
+        "compose",
+        "--project-name",
+        project_name,
         "run",
         "--rm",
-        "-e", f"ANOMALY_MODE={mode}",
-        "-e", f"SERVICE_NAME={svc_meta['SERVICE_NAME']}",
-        "-e", f"REGION={svc_meta['REGION']}",
-        "-e", f"EVENTS_PER_SECOND={eps}",
-        "-e", "KAFKA_BOOTSTRAP_SERVERS=kafka:9092",
-        "-e", "KAFKA_TOPIC=logs.raw",
-        "--no-deps",       # don't also start dependency services
+        "-e",
+        f"ANOMALY_MODE={mode}",
+        "-e",
+        f"SERVICE_NAME={svc_meta['SERVICE_NAME']}",
+        "-e",
+        f"REGION={svc_meta['REGION']}",
+        "-e",
+        f"EVENTS_PER_SECOND={eps}",
+        "-e",
+        "KAFKA_BOOTSTRAP_SERVERS=kafka:9092",
+        "-e",
+        "KAFKA_TOPIC=logs.raw",
+        "--no-deps",  # don't also start dependency services
         compose_service,
     ]
 
@@ -313,7 +320,7 @@ def run_anomaly_producer(
             f"   on the '{svc_meta['SERVICE_NAME']}' anomaly score panel.\n"
             f"   Or query directly:\n"
             f"     docker exec -it timescaledb psql -U driftwatch -d driftwatch \\\n"
-            f"       -c \"SELECT time, service_name, anomaly_score FROM anomalies ORDER BY time DESC LIMIT 10;\""
+            f'       -c "SELECT time, service_name, anomaly_score FROM anomalies ORDER BY time DESC LIMIT 10;"'
         )
 
 

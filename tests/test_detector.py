@@ -45,6 +45,7 @@ from train import generate_training_data  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_events(
     latencies: list[float],
     status_codes: list[int],
@@ -52,7 +53,12 @@ def _make_events(
     now: float = 1_000_000.0,
 ) -> list[dict]:
     return [
-        {"latency_ms": lat, "status_code": code, "service_name": service, "timestamp": now}
+        {
+            "latency_ms": lat,
+            "status_code": code,
+            "service_name": service,
+            "timestamp": now,
+        }
         for lat, code in zip(latencies, status_codes)
     ]
 
@@ -65,6 +71,7 @@ def _fit_model(n_samples: int = 3000, seed: int = 42):
     per-service representation in the training corpus (1000 windows each).
     """
     from sklearn.ensemble import IsolationForest
+
     X = generate_training_data(n_samples=n_samples, seed=seed)
     clf = IsolationForest(
         n_estimators=100,
@@ -79,6 +86,7 @@ def _fit_model(n_samples: int = 3000, seed: int = 42):
 # ---------------------------------------------------------------------------
 # 1. Percentile helper
 # ---------------------------------------------------------------------------
+
 
 class TestPercentile:
     def test_p50_odd(self):
@@ -104,6 +112,7 @@ class TestPercentile:
 # 2. Status entropy
 # ---------------------------------------------------------------------------
 
+
 class TestStatusEntropy:
     def test_single_code_zero_entropy(self):
         """All events with the same status code → entropy = 0."""
@@ -128,10 +137,11 @@ class TestStatusEntropy:
 # 3. extract_features
 # ---------------------------------------------------------------------------
 
+
 class TestExtractFeatures:
     def test_normal_window_basic(self):
-        latencies = [80.0] * 90 + [200.0] * 9 + [500.0]   # 100 events
-        status_codes = [200] * 98 + [500, 500]              # 2 % error rate
+        latencies = [80.0] * 90 + [200.0] * 9 + [500.0]  # 100 events
+        status_codes = [200] * 98 + [500, 500]  # 2 % error rate
         wf = extract_features("svc", 1_000.0, _make_events(latencies, status_codes))
         assert wf.request_count == 100
         assert wf.error_rate == pytest.approx(0.02)
@@ -166,13 +176,19 @@ class TestExtractFeatures:
 # 4. SlidingWindowAccumulator
 # ---------------------------------------------------------------------------
 
+
 class TestSlidingWindowAccumulator:
     def test_emit_returns_per_service(self):
         acc = SlidingWindowAccumulator(window_seconds=30, slide_seconds=10)
         now = 1_000.0
         for svc in ["auth", "payments", "inventory"]:
             acc.add_event(
-                {"service_name": svc, "timestamp": now, "latency_ms": 80.0, "status_code": 200}
+                {
+                    "service_name": svc,
+                    "timestamp": now,
+                    "latency_ms": 80.0,
+                    "status_code": 200,
+                }
             )
         windows = acc.emit_windows(now)
         service_names = {w.service_name for w in windows}
@@ -182,8 +198,22 @@ class TestSlidingWindowAccumulator:
         acc = SlidingWindowAccumulator(window_seconds=30, slide_seconds=10)
         base = 1_000.0
         # Add one old event (60 s before now) and one recent.
-        acc.add_event({"service_name": "svc", "timestamp": base - 60, "latency_ms": 80.0, "status_code": 200})
-        acc.add_event({"service_name": "svc", "timestamp": base, "latency_ms": 80.0, "status_code": 200})
+        acc.add_event(
+            {
+                "service_name": "svc",
+                "timestamp": base - 60,
+                "latency_ms": 80.0,
+                "status_code": 200,
+            }
+        )
+        acc.add_event(
+            {
+                "service_name": "svc",
+                "timestamp": base,
+                "latency_ms": 80.0,
+                "status_code": 200,
+            }
+        )
         windows = acc.emit_windows(base)
         # Only the recent event survives the 30 s window.
         svc_window = next(w for w in windows if w.service_name == "svc")
@@ -201,6 +231,7 @@ class TestSlidingWindowAccumulator:
 # 5. Model scoring: normal vs. anomalous windows
 # ---------------------------------------------------------------------------
 
+
 class TestModelScoring:
     """
     These tests train a fresh IsolationForest in-process and verify that
@@ -215,6 +246,7 @@ class TestModelScoring:
         """Return (decision_function_score, is_anomalous)."""
         import numpy as np
         from detector import score_windows
+
         results = score_windows(model, [wf])
         r = results[0]
         return r["anomaly_score"], r["is_anomalous"]
@@ -226,6 +258,7 @@ class TestModelScoring:
         """
         # Realistic normal window: ~150 events, low error rate, normal latencies.
         import random
+
         rng = random.Random(99)
         latencies = [max(1.0, rng.lognormvariate(4.4, 0.5)) for _ in range(150)]
         codes = [200] * 135 + [201] * 8 + [204] * 4 + [400] * 2 + [404] + [500]
@@ -233,9 +266,9 @@ class TestModelScoring:
         wf = extract_features("svc", 1_000.0, events)
         _, is_anomalous = self._score(model, wf)
         # A perfectly normal window should not be flagged.
-        assert not is_anomalous, (
-            f"Normal window was incorrectly flagged as anomalous: {wf.to_model_input()}"
-        )
+        assert (
+            not is_anomalous
+        ), f"Normal window was incorrectly flagged as anomalous: {wf.to_model_input()}"
 
     def test_latency_spike_is_anomalous(self, model):
         """
@@ -243,6 +276,7 @@ class TestModelScoring:
         flagged as anomalous.
         """
         import random
+
         rng = random.Random(7)
         # Latency spike: multiply normal latency by 30×.
         latencies = [max(1.0, rng.lognormvariate(4.4, 0.5)) * 30 for _ in range(150)]
@@ -272,10 +306,11 @@ class TestModelScoring:
         caught by the model.
         """
         import random
+
         rng = random.Random(13)
         # 5× latency degradation alongside error burst (realistic for a crashing backend)
         latencies = [max(1.0, rng.lognormvariate(4.4, 0.5)) * 5 for _ in range(150)]
-        codes = [500] * 120 + [200] * 30   # 80 % error rate
+        codes = [500] * 120 + [200] * 30  # 80 % error rate
         events = _make_events(latencies, codes)
         wf = extract_features("svc", 1_000.0, events)
         score, is_anomalous = self._score(model, wf)
@@ -305,6 +340,7 @@ class TestModelScoring:
         wf_anomalous = extract_features("svc", 1_000.0, _make_events(lat_a, codes_a))
 
         from detector import score_windows
+
         r_n = score_windows(model, [wf_normal])[0]
         r_a = score_windows(model, [wf_anomalous])[0]
 
@@ -317,6 +353,7 @@ class TestModelScoring:
 # ---------------------------------------------------------------------------
 # 6. Per-service normal-window regression tests (ADR 0003)
 # ---------------------------------------------------------------------------
+
 
 class TestPerServiceNormalWindows:
     """
@@ -334,11 +371,13 @@ class TestPerServiceNormalWindows:
 
     def _score(self, model, wf: WindowFeatures) -> bool:
         from detector import score_windows
+
         return score_windows(model, [wf])[0]["is_anomalous"]
 
     def _normal_window(self, n_events: int, service: str, seed: int) -> WindowFeatures:
         """Build a realistic normal window with n_events events."""
         import random
+
         rng = random.Random(seed)
         latencies = [max(1.0, rng.lognormvariate(4.4, 0.5)) for _ in range(n_events)]
         # Status distribution matching producer.py NORMAL_STATUS_WEIGHTS
@@ -356,9 +395,9 @@ class TestPerServiceNormalWindows:
         so it passed before.  Kept as a baseline sanity check.
         """
         wf = self._normal_window(n_events=150, service="auth-service", seed=101)
-        assert not self._score(model, wf), (
-            f"auth-service normal window (150 events) flagged as anomalous: {wf.to_model_input()}"
-        )
+        assert not self._score(
+            model, wf
+        ), f"auth-service normal window (150 events) flagged as anomalous: {wf.to_model_input()}"
 
     def test_payments_service_normal_not_anomalous(self, model):
         """
@@ -379,9 +418,9 @@ class TestPerServiceNormalWindows:
         explicitly covered as part of the per-service test suite.
         """
         wf = self._normal_window(n_events=120, service="inventory-service", seed=103)
-        assert not self._score(model, wf), (
-            f"inventory-service normal window (120 events) flagged as anomalous: {wf.to_model_input()}"
-        )
+        assert not self._score(
+            model, wf
+        ), f"inventory-service normal window (120 events) flagged as anomalous: {wf.to_model_input()}"
 
     def test_payments_service_error_burst_still_anomalous(self, model):
         """
@@ -390,11 +429,15 @@ class TestPerServiceNormalWindows:
         still be flagged even at the lower 90-event count.
         """
         import random
+
         rng = random.Random(201)
         latencies = [max(1.0, rng.lognormvariate(4.4, 0.5)) for _ in range(90)]
         codes = [500] * 72 + [200] * 18  # 80 % errors
-        wf = extract_features("payments-service", 1_000.0, _make_events(latencies, codes))
+        wf = extract_features(
+            "payments-service", 1_000.0, _make_events(latencies, codes)
+        )
         from detector import score_windows
+
         result = score_windows(model, [wf])[0]
         assert result["is_anomalous"], (
             f"payments-service error-burst window NOT flagged: "

@@ -56,13 +56,14 @@ from typing import Any, NamedTuple
 # Feature vector type
 # ---------------------------------------------------------------------------
 
+
 class WindowFeatures(NamedTuple):
     """Extracted feature vector for one (service, time-window) pair."""
 
     service_name: str
-    window_end_ts: float          # Unix timestamp of the window's trailing edge
+    window_end_ts: float  # Unix timestamp of the window's trailing edge
     request_count: float
-    error_rate: float             # fraction of events with status_code >= 500
+    error_rate: float  # fraction of events with status_code >= 500
     p50_latency_ms: float
     p95_latency_ms: float
     p99_latency_ms: float
@@ -84,6 +85,7 @@ class WindowFeatures(NamedTuple):
 # Percentile helper
 # ---------------------------------------------------------------------------
 
+
 def _percentile(values: list[float], pct: float) -> float:
     """
     Compute the pct-th percentile of a sorted or unsorted list.
@@ -102,6 +104,7 @@ def _percentile(values: list[float], pct: float) -> float:
 # ---------------------------------------------------------------------------
 # Status-code entropy
 # ---------------------------------------------------------------------------
+
 
 def _status_entropy(status_codes: list[int]) -> float:
     """
@@ -130,6 +133,7 @@ def _status_entropy(status_codes: list[int]) -> float:
 # ---------------------------------------------------------------------------
 # Core accumulator
 # ---------------------------------------------------------------------------
+
 
 class SlidingWindowAccumulator:
     """
@@ -204,6 +208,7 @@ class SlidingWindowAccumulator:
 # ---------------------------------------------------------------------------
 # Feature extraction from a window's event list
 # ---------------------------------------------------------------------------
+
 
 def _extract_features(
     service_name: str,
