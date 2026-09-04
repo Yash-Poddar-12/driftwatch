@@ -67,9 +67,8 @@ from typing import NamedTuple
 
 import joblib
 import numpy as np
-from sklearn.ensemble import IsolationForest
-
 from features import WindowFeatures, extract_features
+from sklearn.ensemble import IsolationForest
 
 # ---------------------------------------------------------------------------
 # Configuration

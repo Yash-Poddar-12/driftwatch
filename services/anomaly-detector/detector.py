@@ -77,10 +77,9 @@ import joblib
 import numpy as np
 import psycopg2
 import psycopg2.extras
+from features import SlidingWindowAccumulator
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
-
-from features import SlidingWindowAccumulator
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -130,7 +129,7 @@ _consumer_ready: bool = False
 class _HealthHandler(BaseHTTPRequestHandler):
     """Minimal health-check handler."""
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/healthz":
             status = "ok" if _consumer_ready else "starting"
             body = json.dumps({"status": status}).encode()
@@ -143,7 +142,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN401
+    def log_message(self, fmt: str, *args: Any) -> None:
         pass  # suppress access log spam
 
 
@@ -204,7 +203,7 @@ def _build_consumer() -> KafkaConsumer:
 # ---------------------------------------------------------------------------
 
 
-def _connect_db() -> "psycopg2.connection":
+def _connect_db() -> psycopg2.connection:
     """
     Open a psycopg2 connection to TimescaleDB with retry.
 
@@ -240,7 +239,7 @@ def _connect_db() -> "psycopg2.connection":
 
 
 def _write_results(
-    conn: "psycopg2.connection",
+    conn: psycopg2.connection,
     results: list[dict[str, Any]],
     features_map: dict[str, Any],
 ) -> None:

@@ -34,7 +34,6 @@ import json
 import logging
 import os
 import random
-import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -172,7 +171,7 @@ def build_event() -> dict[str, Any]:
 class _HealthHandler(BaseHTTPRequestHandler):
     """Minimal HTTP handler — responds 200 OK to GET /healthz."""
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/healthz":
             body = b'{"status":"ok"}'
             self.send_response(200)
@@ -184,7 +183,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN401
+    def log_message(self, fmt: str, *args: Any) -> None:
         # Suppress the default BaseHTTPServer access log spam.
         pass
 

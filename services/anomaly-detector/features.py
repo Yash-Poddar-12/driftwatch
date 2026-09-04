@@ -51,7 +51,6 @@ import math
 from collections import defaultdict, deque
 from typing import Any, NamedTuple
 
-
 # ---------------------------------------------------------------------------
 # Feature vector type
 # ---------------------------------------------------------------------------

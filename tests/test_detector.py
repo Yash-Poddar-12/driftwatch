@@ -24,22 +24,20 @@ import math
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 # Make the service source importable from the tests directory.
 _SRC = Path(__file__).parent.parent / "services" / "anomaly-detector"
 sys.path.insert(0, str(_SRC))
 
-from features import (  # noqa: E402  (import after path manipulation)
+from features import (
     SlidingWindowAccumulator,
     WindowFeatures,
     _percentile,
     _status_entropy,
     extract_features,
 )
-from train import generate_training_data  # noqa: E402
-
+from train import generate_training_data
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -244,7 +242,6 @@ class TestModelScoring:
 
     def _score(self, model, wf: WindowFeatures) -> tuple[float, bool]:
         """Return (decision_function_score, is_anomalous)."""
-        import numpy as np
         from detector import score_windows
 
         results = score_windows(model, [wf])
