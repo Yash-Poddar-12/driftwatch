@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 scripts/seed_anomalies.py — Inject a labeled anomaly into the DriftWatch pipeline.
 
