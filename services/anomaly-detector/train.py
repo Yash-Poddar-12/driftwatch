@@ -67,39 +67,44 @@ from typing import NamedTuple
 
 import joblib
 import numpy as np
-from sklearn.ensemble import IsolationForest
-
 from features import WindowFeatures, extract_features
+from sklearn.ensemble import IsolationForest
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 RANDOM_SEED: int = int(os.environ.get("RANDOM_SEED", "42"))
-N_SAMPLES: int = int(os.environ.get("N_TRAIN_SAMPLES", "6000"))  # divisible by 3 services
-WINDOW_SECONDS: float = 30.0   # must match WINDOW_SECONDS in docker-compose.yml
+N_SAMPLES: int = int(
+    os.environ.get("N_TRAIN_SAMPLES", "6000")
+)  # divisible by 3 services
+WINDOW_SECONDS: float = 30.0  # must match WINDOW_SECONDS in docker-compose.yml
 MODELS_DIR: Path = Path(__file__).parent / "models"
 MODEL_PATH: Path = MODELS_DIR / "isolation_forest_v1.joblib"
 
 # Isolation Forest hyperparameters.
-N_ESTIMATORS: int = 100     # number of trees; 100 is the sklearn default and good baseline
-MAX_SAMPLES: str | int = "auto"  # "auto" → min(256, n_samples); fast and generalises well
-CONTAMINATION: float = 0.05     # assumed anomaly fraction in training data
+N_ESTIMATORS: int = 100  # number of trees; 100 is the sklearn default and good baseline
+MAX_SAMPLES: str | int = (
+    "auto"  # "auto" → min(256, n_samples); fast and generalises well
+)
+CONTAMINATION: float = 0.05  # assumed anomaly fraction in training data
 
 # ---------------------------------------------------------------------------
 # Per-service traffic profiles — mirrors docker-compose.yml exactly.
 # ---------------------------------------------------------------------------
 
+
 class ServiceProfile(NamedTuple):
     name: str
     events_per_second: float  # from EVENTS_PER_SECOND env var in docker-compose.yml
+
 
 # These must be kept in sync with the SERVICE_NAME / EVENTS_PER_SECOND values
 # in docker-compose.yml (log-producer-auth, log-producer-payments,
 # log-producer-inventory).  If a new producer is added, add it here too.
 SERVICE_PROFILES: list[ServiceProfile] = [
-    ServiceProfile("auth-service",      events_per_second=5.0),
-    ServiceProfile("payments-service",  events_per_second=3.0),
+    ServiceProfile("auth-service", events_per_second=5.0),
+    ServiceProfile("payments-service", events_per_second=3.0),
     ServiceProfile("inventory-service", events_per_second=4.0),
 ]
 
@@ -191,7 +196,9 @@ def generate_training_data(
     for i in range(n_samples):
         # Round-robin across services → equal representation.
         svc = profiles[i % n_profiles]
-        wf = _generate_normal_window(rng, service=svc, window_seconds=window_seconds, now=now)
+        wf = _generate_normal_window(
+            rng, service=svc, window_seconds=window_seconds, now=now
+        )
         rows.append(wf.to_model_input())
     return np.array(rows, dtype=np.float64)
 
@@ -199,6 +206,7 @@ def generate_training_data(
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
+
 
 def train(
     n_samples: int = N_SAMPLES,
@@ -224,26 +232,32 @@ def train(
     IsolationForest
         The fitted model (also persisted to save_path).
     """
-    print(f"[train] Generating {n_samples} synthetic normal-traffic windows "
-          f"({n_samples // len(SERVICE_PROFILES)} per service) ...")
+    print(
+        f"[train] Generating {n_samples} synthetic normal-traffic windows "
+        f"({n_samples // len(SERVICE_PROFILES)} per service) ..."
+    )
     for svc in SERVICE_PROFILES:
         base = svc.events_per_second * WINDOW_SECONDS
-        print(f"[train]   {svc.name}: {svc.events_per_second} ev/s "
-              f"-> ~{base:.0f} events/window (+/-20 %)")
+        print(
+            f"[train]   {svc.name}: {svc.events_per_second} ev/s "
+            f"-> ~{base:.0f} events/window (+/-20 %)"
+        )
 
     X = generate_training_data(n_samples=n_samples, seed=seed)
     print(f"[train] Training data shape: {X.shape}")
-    print(f"[train] Feature stats (mean across all services):\n"
-          f"  request_count={X[:, 0].mean():.1f}, error_rate={X[:, 1].mean():.4f},\n"
-          f"  p50={X[:, 2].mean():.1f} ms, p95={X[:, 3].mean():.1f} ms,\n"
-          f"  p99={X[:, 4].mean():.1f} ms, status_entropy={X[:, 5].mean():.4f}")
+    print(
+        f"[train] Feature stats (mean across all services):\n"
+        f"  request_count={X[:, 0].mean():.1f}, error_rate={X[:, 1].mean():.4f},\n"
+        f"  p50={X[:, 2].mean():.1f} ms, p95={X[:, 3].mean():.1f} ms,\n"
+        f"  p99={X[:, 4].mean():.1f} ms, status_entropy={X[:, 5].mean():.4f}"
+    )
 
     clf = IsolationForest(
         n_estimators=N_ESTIMATORS,
         max_samples=MAX_SAMPLES,
         contamination=CONTAMINATION,
         random_state=seed,
-        n_jobs=-1,    # use all available cores — fast even on a laptop
+        n_jobs=-1,  # use all available cores — fast even on a laptop
     )
     clf.fit(X)
     print("[train] Isolation Forest trained.")

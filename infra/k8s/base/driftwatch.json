@@ -1,0 +1,641 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "13.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "postgres",
+      "name": "PostgreSQL",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+        "enable": true,
+        "hide": false,
+        "iconColor": "red",
+        "name": "Anomaly Events",
+        "rawQuery": true,
+        "rawSql": "SELECT\n  time AS \"time\",\n  service_name AS text,\n  'anomaly_score=' || round(anomaly_score::numeric, 4) AS tags\nFROM anomalies\nWHERE $__timeFilter(time)\nORDER BY time",
+        "showIn": 0,
+        "step": "10s",
+        "target": "",
+        "type": "table"
+      }
+    ]
+  },
+  "description": "DriftWatch — real-time anomaly detection dashboard. Shows request rate, error rate, latency percentiles per service, and anomaly scores with flagged points highlighted.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 101,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS anomalies\nFROM anomalies\nWHERE $__timeFilter(time)",
+          "refId": "A"
+        }
+      ],
+      "title": "Anomalies (window)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.2 }
+            ]
+          },
+          "unit": "percentunit",
+          "max": 1,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 102,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT AVG(error_rate) AS avg_error_rate\nFROM metrics\nWHERE $__timeFilter(time)",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Error Rate (window)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 200 },
+              { "color": "red", "value": 500 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 103,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT AVG(p99_latency_ms) AS p99\nFROM metrics\nWHERE $__timeFilter(time)",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg p99 Latency (window)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 200,
+      "title": "Request Rate & Error Rate",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "description": "Request count per sliding window, per service. A sudden drop indicates the service may be down; a spike indicates a traffic surge.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 201,
+      "options": {
+        "legend": {
+          "calcs": ["last", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time AS \"time\",\n  service_name AS metric,\n  request_count AS value\nFROM metrics\nWHERE $__timeFilter(time)\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Request Count per Window",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "description": "Fraction of requests returning HTTP 5xx per sliding window. The most direct signal of a broken backend. Values above 5% are typically alertable.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line+area", "steps": [{ "color": "transparent", "value": null }, { "color": "rgba(245, 54, 54, 0.1)", "value": 0.05 }] }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 202,
+      "options": {
+        "legend": {
+          "calcs": ["last", "mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time AS \"time\",\n  service_name AS metric,\n  error_rate AS value\nFROM metrics\nWHERE $__timeFilter(time)\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Error Rate per Service",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 300,
+      "title": "Latency Percentiles",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "description": "p50 (median), p95, and p99 latency in milliseconds per service. p95/p99 tail spikes typically precede outright failures — they're the earliest warning signal from the latency dimension.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "ms",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 15 },
+      "id": 301,
+      "options": {
+        "legend": {
+          "calcs": ["last", "mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time AS \"time\",\n  service_name || ' p50' AS metric,\n  p50_latency_ms AS value\nFROM metrics\nWHERE $__timeFilter(time)\nUNION ALL\nSELECT\n  time AS \"time\",\n  service_name || ' p95' AS metric,\n  p95_latency_ms AS value\nFROM metrics\nWHERE $__timeFilter(time)\nUNION ALL\nSELECT\n  time AS \"time\",\n  service_name || ' p99' AS metric,\n  p99_latency_ms AS value\nFROM metrics\nWHERE $__timeFilter(time)\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Latency Percentiles per Service (p50 / p95 / p99)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 400,
+      "title": "Anomaly Detection",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "description": "IsolationForest decision_function score per service. Lower (more negative) = more anomalous. Normal windows cluster near 0 or slightly positive. Flagged anomaly windows (is_anomalous=true) are shown as large red points on a separate series — visually distinct from the continuous normal signal.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "anomaly score",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line", "steps": [{ "color": "transparent", "value": null }, { "color": "red", "value": 0 }] }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0 }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*\\[ANOMALY\\]" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } },
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              { "id": "custom.pointSize", "value": 12 },
+              { "id": "custom.showPoints", "value": "always" },
+              { "id": "custom.lineWidth", "value": 0 },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+      "id": 401,
+      "options": {
+        "legend": {
+          "calcs": ["last", "min", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "-- Normal windows: continuous line showing the anomaly score signal\nSELECT\n  time AS \"time\",\n  service_name AS metric,\n  anomaly_score AS value\nFROM metrics\nWHERE $__timeFilter(time)\n  AND is_anomalous = false\nORDER BY time",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "-- Anomalous windows: large red points, same Y-axis scale\n-- Suffix [ANOMALY] matches the override above → red dot, no line\nSELECT\n  time AS \"time\",\n  service_name || ' [ANOMALY]' AS metric,\n  anomaly_score AS value\nFROM metrics\nWHERE $__timeFilter(time)\n  AND is_anomalous = true\nORDER BY time",
+          "refId": "B"
+        }
+      ],
+      "title": "Anomaly Score over Time (● = flagged anomaly)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "description": "Shannon entropy of the HTTP status-code distribution per service. Normal traffic is low-entropy (mostly 200). Unusual status mixes (redirect loops, mass 4xx) raise entropy without necessarily raising the raw error rate — catching anomalies that error_rate alone would miss.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "nats",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "id": 402,
+      "options": {
+        "legend": {
+          "calcs": ["last", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time AS \"time\",\n  service_name AS metric,\n  status_entropy AS value\nFROM metrics\nWHERE $__timeFilter(time)\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Status Code Entropy per Service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+      "description": "List of all anomaly events in the selected time range. Each row is a window that the Isolation Forest flagged as anomalous, with the full feature snapshot so you can understand why.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 80 }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "anomaly_score" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "mode": "gradient", "type": "color-background" } },
+              { "id": "color", "value": { "mode": "continuous-RdYlGr" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": -0.05 }, { "color": "green", "value": 0 }] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "error_rate" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "id": 403,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true
+      },
+      "pluginVersion": "13.0.2",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "driftwatch-timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  time,\n  service_name,\n  round(anomaly_score::numeric, 4) AS anomaly_score,\n  round(error_rate::numeric, 4) AS error_rate,\n  round(p99_latency_ms::numeric, 1) AS p99_ms,\n  request_count\nFROM anomalies\nWHERE $__timeFilter(time)\nORDER BY time DESC\nLIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Anomaly Event Log",
+      "type": "table"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["driftwatch", "anomaly-detection", "timescaledb"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "DriftWatch — Anomaly Detection",
+  "uid": "driftwatch-anomaly-v1",
+  "version": 1,
+  "weekStart": ""
+}

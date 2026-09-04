@@ -1,0 +1,49 @@
+# datasources.yml — Grafana datasource provisioning
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# WHY provision via YAML instead of clicking in the Grafana UI?
+#   Provisioning files are checked into the repo, so the datasource
+#   configuration is version-controlled, reproducible, and doesn't require
+#   manual setup on every fresh container start.  This is "dashboard-as-code"
+#   (README §4.5) — the same principle applies to datasources.
+#
+# WHY the "postgresql" type for TimescaleDB?
+#   TimescaleDB is 100% PostgreSQL-compatible; no special Grafana plugin is
+#   needed.  The standard PostgreSQL datasource speaks the pg wire protocol,
+#   which TimescaleDB responds to natively.  The only TimescaleDB-specific
+#   setting here is enabling timescaledb=true in the jsonData so Grafana can
+#   use $__timeGroup() with TimescaleDB's time_bucket() under the hood.
+#
+# WHY sslmode=disable for local dev?
+#   SSL termination adds complexity (cert management) with no benefit when
+#   both services are inside the same Docker bridge network.  In production
+#   (EKS), this would be set to "require" or "verify-full".
+
+apiVersion: 1
+
+datasources:
+  - name: TimescaleDB
+    type: postgres
+    uid: driftwatch-timescaledb
+    url: timescaledb:5432
+    # These credentials are injected at runtime from Grafana env vars,
+    # which are sourced from docker-compose.yml environment / .env.
+    # They never appear as plaintext in this committed file.
+    user: ${TIMESCALEDB_USER}
+    secureJsonData:
+      password: ${TIMESCALEDB_PASSWORD}
+    jsonData:
+      database: ${TIMESCALEDB_DB}
+      sslmode: disable
+      # Tells Grafana this is TimescaleDB; enables time_bucket() optimisations
+      # in the visual query builder.
+      timescaledb: true
+      # Use UTC for all time expressions so dashboard panels are consistent
+      # regardless of the browser's local timezone.
+      postgresVersion: 1600      # Postgres 16 (TimescaleDB latest-pg16)
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    isDefault: true
+    editable: false              # prevent accidental UI edits overwriting the file

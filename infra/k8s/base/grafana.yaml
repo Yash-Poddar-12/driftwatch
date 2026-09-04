@@ -1,0 +1,167 @@
+# grafana.yaml — Grafana Deployment + ClusterIP Service
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# ── WHY Deployment (not StatefulSet) for Grafana? ─────────────────────────── #
+#   Grafana is effectively STATELESS in this setup because all configuration
+#   comes from provisioned files (datasources.yml, dashboards.yml, driftwatch.json)
+#   that are mounted as ConfigMaps.  The dashboard definitions and datasource
+#   config live in the repo, not in Grafana's internal SQLite database.
+#   If the Grafana pod restarts, it re-reads the same provisioned files from
+#   the ConfigMap and presents the same state.  No PVC needed.
+#   (Note: if users were allowed to create/modify dashboards via the UI, we'd
+#   need a persistent volume for Grafana's SQLite DB.  allowUiUpdates: false
+#   in dashboards.yml prevents this divergence.)
+#
+# ── Provisioning config via ConfigMap ─────────────────────────────────────── #
+#   In docker-compose.yml, provisioning files were bind-mounted from the host.
+#   In Kubernetes, the equivalent is a ConfigMap volume mount.
+#   Kustomize's configMapGenerator reads the provisioning files from disk and
+#   bakes them into a ConfigMap at apply time.
+#   The ConfigMap names are referenced in the volumeMounts below.
+#
+# ── Grafana env vars: credentials from Secret, config from ConfigMap ─────── #
+#   GF_SECURITY_ADMIN_PASSWORD comes from the Secret.
+#   TimescaleDB credentials (TIMESCALEDB_USER, _PASSWORD, _DB) are injected
+#   so datasources.yml can use ${TIMESCALEDB_USER} interpolation — same pattern
+#   as docker-compose.yml.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana-oss:13.0.2   # pinned per docker-compose
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            # ── Grafana auth ─────────────────────────────────────────────────── #
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: driftwatch-secret
+                  key: GRAFANA_ADMIN_PASSWORD
+
+            # ── Anonymous access for local dev ───────────────────────────────── #
+            # Disable login screen — anyone who can reach port 3000 gets Admin.
+            # MUST be disabled in production.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Admin"
+
+            # ── Provisioning path ─────────────────────────────────────────────── #
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+
+            # ── TimescaleDB credentials for datasources.yml interpolation ─────── #
+            # datasources.yml contains ${TIMESCALEDB_USER} etc. placeholders.
+            # Grafana expands these from environment variables at startup.
+            - name: TIMESCALEDB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: driftwatch-secret
+                  key: TIMESCALEDB_USER
+            - name: TIMESCALEDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: driftwatch-secret
+                  key: TIMESCALEDB_PASSWORD
+            - name: TIMESCALEDB_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: TIMESCALEDB_DB
+
+            # ── Disable telemetry ─────────────────────────────────────────────── #
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+
+          # ── Health probes ─────────────────────────────────────────────────── #
+          # Grafana exposes /api/health — returns 200 when the HTTP server is up.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+          volumeMounts:
+            # datasources.yml → tells Grafana where/how to connect to TimescaleDB
+            - name: grafana-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            # dashboards.yml + driftwatch.json → dashboard definitions
+            - name: grafana-dashboards-config
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+              subPath: dashboards.yml
+              readOnly: true
+            - name: grafana-dashboard-json
+              mountPath: /etc/grafana/provisioning/dashboards/driftwatch.json
+              subPath: driftwatch.json
+              readOnly: true
+
+      volumes:
+        # ConfigMaps are generated by Kustomize's configMapGenerator from
+        # the provisioning files in services/dashboard-provisioning/
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
+        - name: grafana-dashboards-config
+          configMap:
+            name: grafana-dashboards-config
+        - name: grafana-dashboard-json
+          configMap:
+            name: grafana-dashboard-json
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http

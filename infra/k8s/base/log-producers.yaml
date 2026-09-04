@@ -1,0 +1,289 @@
+# log-producers.yaml — Three log-producer Deployments + ClusterIP Services
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# ── WHY Deployment (not StatefulSet) for log-producers? ───────────────────── #
+#   Log producers are STATELESS — they generate events and publish to Kafka.
+#   They hold zero persistent state themselves; if a producer pod crashes and
+#   restarts, it just starts publishing new events at the same rate.  There's
+#   no storage to reattach and no stable identity required.
+#   Deployments are the right primitive for stateless workloads: they give you
+#   rolling updates, easy horizontal scaling, and simpler pod scheduling.
+#
+# ── WHY three separate Deployments instead of one Deployment with 3 replicas? #
+#   Each producer represents a DIFFERENT microservice in a different region,
+#   with distinct SERVICE_NAME, REGION, and EVENTS_PER_SECOND values.
+#   A single Deployment with 3 replicas would produce three IDENTICAL pods —
+#   wrong for this scenario.  Three separate Deployments allow independent
+#   configuration per service while reusing the same image.
+#
+# ── imagePullPolicy: IfNotPresent ─────────────────────────────────────────── #
+#   driftwatch/log-producer:latest is a locally-built image loaded into Kind
+#   via: kind load docker-image driftwatch/log-producer:latest --name driftwatch-local
+#   It does NOT exist on Docker Hub.  With the default imagePullPolicy of
+#   Always (for :latest tags), Kubernetes would try to pull it from Docker Hub
+#   and fail with ImagePullBackOff.
+#   IfNotPresent tells Kubernetes: "if the image is already present on the
+#   node (loaded via kind load), use it — don't try to pull."
+#   This is the standard pattern for Kind-based local development.
+#
+# ── /healthz readiness + liveness probes ─────────────────────────────────── #
+#   producer.py starts a daemon-thread HTTP server on port 8080 that responds
+#   to GET /healthz with 200 OK (Phase 1 feature, per AGENTS.md rule 6).
+#   readinessProbe: pod only enters the Service endpoints when /healthz is 200.
+#                   This prevents traffic reaching pods that haven't connected
+#                   to Kafka yet (the startup retry loop may be running).
+#   livenessProbe:  Kubernetes restarts the pod if /healthz stops responding,
+#                   detecting stuck consumer loops or deadlocks.
+---
+# ── auth-service producer ──────────────────────────────────────────────────── #
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-producer-auth
+  labels:
+    app: log-producer-auth
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-producer-auth
+  template:
+    metadata:
+      labels:
+        app: log-producer-auth
+    spec:
+      containers:
+        - name: log-producer
+          image: driftwatch/log-producer:latest
+          # CRITICAL: must be IfNotPresent for Kind-loaded local images.
+          # See design note above.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: healthz
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: KAFKA_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_TOPIC
+            # Service-specific config — hardcoded per producer identity
+            - name: SERVICE_NAME
+              value: "auth-service"
+            - name: REGION
+              value: "us-east-1"
+            - name: EVENTS_PER_SECOND
+              value: "5"
+            - name: ANOMALY_MODE
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-producer-auth
+  labels:
+    app: log-producer-auth
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  selector:
+    app: log-producer-auth
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: healthz
+---
+# ── payments-service producer ──────────────────────────────────────────────── #
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-producer-payments
+  labels:
+    app: log-producer-payments
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-producer-payments
+  template:
+    metadata:
+      labels:
+        app: log-producer-payments
+    spec:
+      containers:
+        - name: log-producer
+          image: driftwatch/log-producer:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: healthz
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: KAFKA_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_TOPIC
+            - name: SERVICE_NAME
+              value: "payments-service"
+            - name: REGION
+              value: "eu-west-1"
+            - name: EVENTS_PER_SECOND
+              value: "3"
+            - name: ANOMALY_MODE
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-producer-payments
+  labels:
+    app: log-producer-payments
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  selector:
+    app: log-producer-payments
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: healthz
+---
+# ── inventory-service producer ─────────────────────────────────────────────── #
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-producer-inventory
+  labels:
+    app: log-producer-inventory
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-producer-inventory
+  template:
+    metadata:
+      labels:
+        app: log-producer-inventory
+    spec:
+      containers:
+        - name: log-producer
+          image: driftwatch/log-producer:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: healthz
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: KAFKA_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_TOPIC
+            - name: SERVICE_NAME
+              value: "inventory-service"
+            - name: REGION
+              value: "ap-southeast-1"
+            - name: EVENTS_PER_SECOND
+              value: "4"
+            - name: ANOMALY_MODE
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-producer-inventory
+  labels:
+    app: log-producer-inventory
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  selector:
+    app: log-producer-inventory
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: healthz

@@ -1,0 +1,56 @@
+# configmap.yaml — Shared non-sensitive configuration for DriftWatch
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# WHY a ConfigMap for this?
+#   ConfigMaps hold non-sensitive key/value pairs that multiple pods need.
+#   Kafka topic name, window sizes, DB host/port, and group IDs are not secrets
+#   — they're just topology/tuning parameters.  Centralising them here means a
+#   single change propagates to all consumers; we don't drift between services.
+#
+# WHY NOT put DB credentials in here?
+#   POSTGRES_PASSWORD and GF_SECURITY_ADMIN_PASSWORD are secrets — they must
+#   live in a Kubernetes Secret (secret.yaml), even though the values are
+#   placeholder defaults for now.  The structure matters: in production, Secret
+#   values will be replaced by sealed-secrets or AWS Secrets Manager without
+#   changing the manifest structure.
+#
+# Field breakdown:
+#   KAFKA_BOOTSTRAP_SERVERS: in-cluster DNS for the Kafka headless service.
+#     kafka-0.kafka-headless.default.svc.cluster.local:9092 is the stable
+#     identity of the single Kafka pod; headless services give each StatefulSet
+#     pod a predictable DNS name (pod-index.headless-svc.namespace.svc...).
+#   KAFKA_TOPIC: name of the raw log stream topic.
+#   KAFKA_GROUP_ID: consumer group name — all anomaly-detector replicas share
+#     this so Kafka distributes partitions across them automatically.
+#   WINDOW_SECONDS / WINDOW_SLIDE_SECONDS: sliding window parameters for the
+#     feature extractor (features.py).
+#   TIMESCALEDB_HOST/PORT: DB network address inside the cluster.
+#   TIMESCALEDB_DB: database name (not a secret).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: driftwatch-config
+  labels:
+    app.kubernetes.io/part-of: driftwatch
+data:
+  # ── Kafka ────────────────────────────────────────────────────────────────── #
+  # Stable DNS name for Kafka pod 0 via the headless service.
+  # Format: <pod-name>.<headless-service-name>.<namespace>.svc.cluster.local
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-0.kafka-headless.default.svc.cluster.local:9092"
+  KAFKA_TOPIC: "logs.raw"
+  KAFKA_GROUP_ID: "driftwatch-anomaly-detector"
+
+  # ── Sliding window parameters ────────────────────────────────────────────── #
+  WINDOW_SECONDS: "30"
+  WINDOW_SLIDE_SECONDS: "10"
+
+  # ── TimescaleDB connection (non-secret parts) ────────────────────────────── #
+  # Host = ClusterIP service name; port = standard Postgres port.
+  TIMESCALEDB_HOST: "timescaledb"
+  TIMESCALEDB_PORT: "5432"
+  TIMESCALEDB_DB: "driftwatch"
+
+  # ── Anomaly detector ─────────────────────────────────────────────────────── #
+  ANOMALY_MODEL_PATH: "/app/models/isolation_forest_v1.joblib"
+  HEALTHZ_PORT: "8084"

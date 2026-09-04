@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 scripts/seed_anomalies.py — Inject a labeled anomaly into the DriftWatch pipeline.
 
@@ -182,17 +181,16 @@ def check_stack_running(project_name: str, compose_service: str) -> None:
     )
     running_containers = result.stdout.strip().splitlines()
 
-    # Accept either naming convention.
-    expected_v2 = f"{project_name}-{compose_service}-1"
-    # Also accept the container_name we set in docker-compose.yml
-    expected_named = compose_service.replace("log-producer-", "log-producer-")
-
-    # The container_name in our compose is e.g. "log-producer-payments"
-    # (without project prefix).
-    matches = [
-        c for c in running_containers
-        if compose_service in c or expected_named in c
-    ]
+    # The Compose file explicitly sets each producer's container_name to its
+    # service name, e.g. ``log-producer-payments``. Keep the two default
+    # patterns too, so the check remains useful if that explicit name is
+    # removed in a future Compose revision.
+    expected_names = {
+        compose_service,
+        f"{project_name}-{compose_service}-1",  # Compose v2 default
+        f"{project_name}_{compose_service}_1",  # Compose v1 default
+    }
+    matches = [c for c in running_containers if c in expected_names]
     if not matches:
         print(
             f"ERROR: No running container found for service '{compose_service}'.\n"
@@ -233,17 +231,25 @@ def run_anomaly_producer(
     eps = str(events_per_second) if events_per_second else svc_meta["EVENTS_PER_SECOND"]
 
     cmd = [
-        "docker", "compose",
-        "--project-name", project_name,
+        "docker",
+        "compose",
+        "--project-name",
+        project_name,
         "run",
         "--rm",
-        "-e", f"ANOMALY_MODE={mode}",
-        "-e", f"SERVICE_NAME={svc_meta['SERVICE_NAME']}",
-        "-e", f"REGION={svc_meta['REGION']}",
-        "-e", f"EVENTS_PER_SECOND={eps}",
-        "-e", "KAFKA_BOOTSTRAP_SERVERS=kafka:9092",
-        "-e", "KAFKA_TOPIC=logs.raw",
-        "--no-deps",       # don't also start dependency services
+        "-e",
+        f"ANOMALY_MODE={mode}",
+        "-e",
+        f"SERVICE_NAME={svc_meta['SERVICE_NAME']}",
+        "-e",
+        f"REGION={svc_meta['REGION']}",
+        "-e",
+        f"EVENTS_PER_SECOND={eps}",
+        "-e",
+        "KAFKA_BOOTSTRAP_SERVERS=kafka:9092",
+        "-e",
+        "KAFKA_TOPIC=logs.raw",
+        "--no-deps",  # don't also start dependency services
         compose_service,
     ]
 
@@ -288,8 +294,11 @@ def run_anomaly_producer(
                 line = proc.stdout.readline()  # type: ignore[union-attr]
                 if line:
                     print(f"  [producer] {line}", end="")
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                print(
+                    f"WARNING: Could not read anomaly-producer output: {exc}",
+                    file=sys.stderr,
+                )
 
             if proc.poll() is not None:
                 # Container exited on its own.
@@ -313,7 +322,7 @@ def run_anomaly_producer(
             f"   on the '{svc_meta['SERVICE_NAME']}' anomaly score panel.\n"
             f"   Or query directly:\n"
             f"     docker exec -it timescaledb psql -U driftwatch -d driftwatch \\\n"
-            f"       -c \"SELECT time, service_name, anomaly_score FROM anomalies ORDER BY time DESC LIMIT 10;\""
+            f'       -c "SELECT time, service_name, anomaly_score FROM anomalies ORDER BY time DESC LIMIT 10;"'
         )
 
 

@@ -32,15 +32,16 @@
 ## Phase 4 — Kubernetes (local, Kind/Minikube)
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| Base K8s manifests (`infra/k8s/base/`) | ⬜ | — | |
-| Local overlay (`infra/k8s/overlays/local/`) | ⬜ | — | |
-| Verify full pipeline running on Kind/Minikube | ⬜ | — | |
+| Base K8s manifests (`infra/k8s/base/`) | ✅ | Antigravity / Claude Sonnet 4.6 | Kafka StatefulSet+headless svc, TimescaleDB StatefulSet+PVC, 3 log-producer Deployments, anomaly-detector Deployment, Grafana Deployment. All with readiness/liveness probes, resource limits. Kustomize base with configMapGenerator for provisioning files. |
+| Local overlay (`infra/k8s/overlays/local/`) | ✅ | Antigravity / Claude Sonnet 4.6 | Resource patches: Kafka 1536Mi (JVM headroom for broker+probe), Grafana 256Mi, detector 256Mi. nc TCP probe on Kafka (kafka-topics.sh spawns second JVM → OOMKill). |
+| Verify full pipeline running on Kind/Minikube | ✅ | Antigravity / Claude Sonnet 4.6 | All 7 pods 1/1 Running on driftwatch-local. TimescaleDB confirms 847+ metric windows and 79+ anomalies stored. Grafana /api/health returns `{"database":"ok","version":"13.0.2"}`. Bug fixes: CRLF+BOM in provisioning ConfigMaps (Grafana crash), Kafka memory 768Mi→1536Mi, probe switched to nc. |
+
 
 ## Phase 5 — CI Pipeline
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
-| `ci.yml`: lint + unit tests on PR | ⬜ | — | |
-| `ci.yml`: build all Docker images on PR | ⬜ | — | |
+| `ci.yml`: lint + unit tests on PR | ✅ | Codex / GPT-5 | Verified: Black reformatted the six existing violations and `black --check services tests scripts` is clean. Local pytest remains 16 passed / 8 failed, with every failure the existing `ModuleNotFoundError: psycopg2` before model scoring; CI installs the pinned detector requirements. Black 26.5.1 and Ruff 0.16.6 are pinned to prevent rules drift; pytest intentionally remains flexible. |
+| `ci.yml`: build all Docker images on PR | 🟨 | Codex / GPT-5 | Buildx matrix is implemented with `docker/build-push-action@v7` and isolated `type=gha` cache scopes. Pending a PR-run verification because the local Docker daemon was unavailable. |
 
 ## Phase 6 — AWS Infra (manual first pass)
 | Task | Status | Assigned Tool | Notes |

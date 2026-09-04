@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            services/anomaly-detector/requirements.txt
+            services/log-producer/requirements.txt
+
+      - name: Install application and CI dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r services/anomaly-detector/requirements.txt
+          python -m pip install -r services/log-producer/requirements.txt
+          python -m pip install black==26.5.1 ruff==0.16.6 pytest
+
+      - name: Check formatting
+        run: black --check services tests scripts
+
+      - name: Lint
+        run: ruff check services tests scripts
+
+      - name: Run unit tests
+        run: pytest
+
+  build-images:
+    name: Build ${{ matrix.name }} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: log-producer
+            context: ./services/log-producer
+          - name: anomaly-detector
+            context: ./services/anomaly-detector
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          tags: driftwatch/${{ matrix.name }}:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

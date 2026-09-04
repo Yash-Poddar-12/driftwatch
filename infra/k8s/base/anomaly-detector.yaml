@@ -1,0 +1,147 @@
+# anomaly-detector.yaml — Anomaly Detector Deployment + ClusterIP Service
+#
+# Design notes (AGENTS.md §1 — explain every choice):
+#
+# ── WHY Deployment (not StatefulSet) for the anomaly detector? ───────────── #
+#   The anomaly detector is STATELESS between restarts:
+#   - The trained model artifact is baked into the Docker image at build time
+#     (see services/anomaly-detector/Dockerfile + train.py), not read from disk
+#     at runtime.
+#   - The sliding window state is in-memory (SlidingWindowAccumulator deques).
+#     Losing it on restart is acceptable — the window refills within seconds
+#     as new Kafka events arrive.
+#   - Kafka consumer offset management is handled by the Kafka broker (stored
+#     in __consumer_offsets topic), not by the detector pod.  A new detector
+#     pod joins the consumer group and picks up where the last one left off.
+#   Therefore: Deployment is correct.  Multiple replicas would split the
+#   Kafka partitions across them automatically (consumer group semantics).
+#
+# ── imagePullPolicy: IfNotPresent ─────────────────────────────────────────── #
+#   Same reason as log-producers.yaml: this is a locally-built image loaded
+#   into Kind.  Must not attempt a Docker Hub pull.
+#
+# ── TIMESCALEDB_URL from Secret ───────────────────────────────────────────── #
+#   The DB connection string includes the password.  It must come from a Secret,
+#   not a ConfigMap.  We inject the full URL as a single env var (matching
+#   what detector.py reads) rather than assembling it from parts in Python,
+#   keeping the application code clean.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-detector
+  labels:
+    app: anomaly-detector
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-detector
+  template:
+    metadata:
+      labels:
+        app: anomaly-detector
+    spec:
+      containers:
+        - name: anomaly-detector
+          image: driftwatch/anomaly-detector:latest
+          imagePullPolicy: IfNotPresent   # Kind-loaded image — do not pull from Hub
+          ports:
+            - containerPort: 8084
+              name: healthz
+          env:
+            # ── Kafka connection ─────────────────────────────────────────────── #
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: KAFKA_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_TOPIC
+            - name: KAFKA_GROUP_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: KAFKA_GROUP_ID
+
+            # ── Sliding window parameters ────────────────────────────────────── #
+            - name: WINDOW_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: WINDOW_SECONDS
+            - name: WINDOW_SLIDE_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: WINDOW_SLIDE_SECONDS
+
+            # ── Model and health config ──────────────────────────────────────── #
+            - name: ANOMALY_MODEL_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: ANOMALY_MODEL_PATH
+            - name: HEALTHZ_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: driftwatch-config
+                  key: HEALTHZ_PORT
+
+            # ── TimescaleDB credentials (from Secret) ────────────────────────── #
+            # The full psycopg2 connection URL, injected from Secret.
+            # Never put this in a ConfigMap — it contains the password.
+            - name: TIMESCALEDB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: driftwatch-secret
+                  key: TIMESCALEDB_URL
+
+          # ── Health probes ─────────────────────────────────────────────────── #
+          # detector.py runs /healthz on HEALTHZ_PORT (8084).
+          # readiness: pod not Ready until /healthz returns 200 — prevents
+          #   routing to a pod still in its Kafka connect retry loop.
+          # liveness: restarts pod if /healthz stops responding (stuck loop).
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8084
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8084
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-detector
+  labels:
+    app: anomaly-detector
+    app.kubernetes.io/part-of: driftwatch
+spec:
+  selector:
+    app: anomaly-detector
+  ports:
+    - port: 8084
+      targetPort: 8084
+      name: healthz

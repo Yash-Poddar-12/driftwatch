@@ -77,10 +77,9 @@ import joblib
 import numpy as np
 import psycopg2
 import psycopg2.extras
+from features import SlidingWindowAccumulator
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
-
-from features import SlidingWindowAccumulator
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -94,13 +93,9 @@ log = logging.getLogger("anomaly-detector")
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get(
-    "KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"
-)
+KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC: str = os.environ.get("KAFKA_TOPIC", "logs.raw")
-KAFKA_GROUP_ID: str = os.environ.get(
-    "KAFKA_GROUP_ID", "driftwatch-anomaly-detector"
-)
+KAFKA_GROUP_ID: str = os.environ.get("KAFKA_GROUP_ID", "driftwatch-anomaly-detector")
 ANOMALY_MODEL_PATH: Path = Path(
     os.environ.get(
         "ANOMALY_MODEL_PATH",
@@ -130,10 +125,11 @@ _consumer_ready: bool = False
 # /healthz (AGENTS.md rule 6)
 # ---------------------------------------------------------------------------
 
+
 class _HealthHandler(BaseHTTPRequestHandler):
     """Minimal health-check handler."""
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/healthz":
             status = "ok" if _consumer_ready else "starting"
             body = json.dumps({"status": status}).encode()
@@ -146,7 +142,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN401
+    def log_message(self, fmt: str, *args: Any) -> None:
         pass  # suppress access log spam
 
 
@@ -160,6 +156,7 @@ def _start_healthz_server() -> None:
 # ---------------------------------------------------------------------------
 # Kafka consumer builder
 # ---------------------------------------------------------------------------
+
 
 def _build_consumer() -> KafkaConsumer:
     """
@@ -195,7 +192,7 @@ def _build_consumer() -> KafkaConsumer:
         value_deserializer=lambda b: json.loads(b.decode("utf-8")),
         enable_auto_commit=False,
         auto_offset_reset="latest",
-        request_timeout_ms=45_000,   # must be > session_timeout_ms (30 000)
+        request_timeout_ms=45_000,  # must be > session_timeout_ms (30 000)
         session_timeout_ms=30_000,
         heartbeat_interval_ms=10_000,  # < session_timeout_ms / 3
     )
@@ -205,7 +202,8 @@ def _build_consumer() -> KafkaConsumer:
 # TimescaleDB writer
 # ---------------------------------------------------------------------------
 
-def _connect_db() -> "psycopg2.connection":
+
+def _connect_db() -> psycopg2.connection:
     """
     Open a psycopg2 connection to TimescaleDB with retry.
 
@@ -241,7 +239,7 @@ def _connect_db() -> "psycopg2.connection":
 
 
 def _write_results(
-    conn: "psycopg2.connection",
+    conn: psycopg2.connection,
     results: list[dict[str, Any]],
     features_map: dict[str, Any],
 ) -> None:
@@ -277,32 +275,36 @@ def _write_results(
         ts = datetime.fromisoformat(r["timestamp"].replace("Z", "+00:00"))
 
         # Build the metrics row.
-        metrics_rows.append((
-            ts,
-            svc,
-            float(wf.request_count) if wf else 0.0,
-            float(wf.error_rate) if wf else 0.0,
-            float(wf.p50_latency_ms) if wf else 0.0,
-            float(wf.p95_latency_ms) if wf else 0.0,
-            float(wf.p99_latency_ms) if wf else 0.0,
-            float(wf.status_entropy) if wf else 0.0,
-            float(r["anomaly_score"]),
-            bool(r["is_anomalous"]),
-        ))
-
-        # Only write to anomalies if flagged.
-        if r["is_anomalous"]:
-            anomaly_rows.append((
+        metrics_rows.append(
+            (
                 ts,
                 svc,
-                float(r["anomaly_score"]),
                 float(wf.request_count) if wf else 0.0,
                 float(wf.error_rate) if wf else 0.0,
                 float(wf.p50_latency_ms) if wf else 0.0,
                 float(wf.p95_latency_ms) if wf else 0.0,
                 float(wf.p99_latency_ms) if wf else 0.0,
                 float(wf.status_entropy) if wf else 0.0,
-            ))
+                float(r["anomaly_score"]),
+                bool(r["is_anomalous"]),
+            )
+        )
+
+        # Only write to anomalies if flagged.
+        if r["is_anomalous"]:
+            anomaly_rows.append(
+                (
+                    ts,
+                    svc,
+                    float(r["anomaly_score"]),
+                    float(wf.request_count) if wf else 0.0,
+                    float(wf.error_rate) if wf else 0.0,
+                    float(wf.p50_latency_ms) if wf else 0.0,
+                    float(wf.p95_latency_ms) if wf else 0.0,
+                    float(wf.p99_latency_ms) if wf else 0.0,
+                    float(wf.status_entropy) if wf else 0.0,
+                )
+            )
 
     try:
         with conn.cursor() as cur:
@@ -347,6 +349,7 @@ def _write_results(
 # Score a batch of feature vectors
 # ---------------------------------------------------------------------------
 
+
 def score_windows(
     model: Any,
     features_list: list,
@@ -364,11 +367,9 @@ def score_windows(
     if not features_list:
         return []
 
-    X = np.array(
-        [wf.to_model_input() for wf in features_list], dtype=np.float64
-    )
-    raw_scores = model.decision_function(X)   # negative → more anomalous
-    predictions = model.predict(X)            # -1 = anomaly, +1 = normal
+    X = np.array([wf.to_model_input() for wf in features_list], dtype=np.float64)
+    raw_scores = model.decision_function(X)  # negative → more anomalous
+    predictions = model.predict(X)  # -1 = anomaly, +1 = normal
 
     results = []
     for wf, score, pred in zip(features_list, raw_scores, predictions):
@@ -389,6 +390,7 @@ def score_windows(
 # Main consumer loop
 # ---------------------------------------------------------------------------
 
+
 def run() -> None:
     """Main entry point — poll Kafka, accumulate events, score windows."""
     global _consumer_ready
@@ -397,9 +399,7 @@ def run() -> None:
 
     # Load model.
     if not ANOMALY_MODEL_PATH.exists():
-        log.error(
-            "Model not found at %s — run train.py first.", ANOMALY_MODEL_PATH
-        )
+        log.error("Model not found at %s — run train.py first.", ANOMALY_MODEL_PATH)
         raise SystemExit(1)
     log.info("Loading model from %s …", ANOMALY_MODEL_PATH)
     model = joblib.load(ANOMALY_MODEL_PATH)
