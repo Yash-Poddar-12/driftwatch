@@ -41,7 +41,7 @@
 | Task | Status | Assigned Tool | Notes |
 |---|---|---|---|
 | `ci.yml`: lint + unit tests on PR | ✅ | Codex / GPT-5 | Verified: Black reformatted the six existing violations and `black --check services tests scripts` is clean. Local pytest remains 16 passed / 8 failed, with every failure the existing `ModuleNotFoundError: psycopg2` before model scoring; CI installs the pinned detector requirements. Black 26.5.1 and Ruff 0.16.6 are pinned to prevent rules drift; pytest intentionally remains flexible. |
-| `ci.yml`: build all Docker images on PR | 🟨 | Codex / GPT-5 | Buildx matrix is implemented with `docker/build-push-action@v7` and isolated `type=gha` cache scopes. Pending a PR-run verification because the local Docker daemon was unavailable. |
+| `ci.yml`: build all Docker images on PR | ✅ | Codex / GPT-5 | Buildx matrix with `docker/build-push-action@v7` and isolated `type=gha` cache scopes. Verified via real PR run: both images built successfully (anomaly-detector 11s, log-producer 21s). Also fixed along the way: EXE001 lint failure from an unused shebang in `scripts/seed_anomalies.py` (Linux-only check — invisible on Windows since NTFS doesn't track the executable bit). |
 
 ## Phase 6 — AWS Infra (manual first pass)
 | Task | Status | Assigned Tool | Notes |
